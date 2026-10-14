@@ -63,7 +63,13 @@ public sealed class VsConanPackage : AsyncPackage
                 var arguments = (e as OleMenuCmdEventArgs)?.InValue as string;
                 _ = JoinableTaskFactory.RunAsync(() => execute(arguments));
             },
-            new CommandID(PackageGuids.CommandSet, id));
+            new CommandID(PackageGuids.CommandSet, id))
+        {
+            // With AllowParams in the .vsct, this is what makes VS pass arguments through: VS asks the
+            // command for its parameter list and, without one, rejects arguments ("does not accept
+            // arguments or switches"). "$" means any argument string.
+            ParametersDescription = "$",
+        };
         command.BeforeQueryStatus += (_, _) => command.Visible = command.Enabled = _controller?.IsActive == true;
         commandService.AddCommand(command);
     }

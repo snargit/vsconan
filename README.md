@@ -121,7 +121,9 @@ Argument syntax:
 The commands are only enabled while the open folder is one VsConan manages. That means a
 folder opened with **File > Open > Folder** whose root has a conanfile and a `CMakeLists.txt`.
 Otherwise `ExecuteCommand` fails with "Command ... is not available". `ExecuteCommand` also
-can't run while a modal dialog is open, such as VsConan's first-run window.
+can't run while a modal dialog is open, such as VsConan's first-run window. Right after a folder opens, VsConan may not
+have loaded yet, so `ExecuteCommand` can report the command as unavailable for a few seconds.
+Callers should retry that error, and also `RPC_E_CALL_REJECTED` (Visual Studio busy).
 
 ### Results
 

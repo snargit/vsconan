@@ -36,18 +36,21 @@ internal static class ProcessRunner
         CancellationToken cancellationToken,
         bool streamStandardOutput = true)
     {
-        var startInfo = new ProcessStartInfo(fileName, string.Join(" ", arguments.Select(QuoteArgument)))
+        var commandLine = string.Join(" ", arguments.Select(QuoteArgument));
+        var startInfo = CreateStartInfo(fileName, commandLine, workingDirectory);
+        try
         {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8,
-            WorkingDirectory = workingDirectory ?? string.Empty,
-        };
-        startInfo.EnvironmentVariables["NO_COLOR"] = "1";
-        startInfo.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8";
+            startInfo.EnvironmentVariables["NO_COLOR"] = "1";
+            startInfo.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8";
+        }
+        catch (ArgumentException)
+        {
+            // The environment has names differing only in case (e.g. HTTPS_PROXY and https_proxy, when
+            // VS was started from a Unix-style shell), which .NET Framework's case-insensitive table
+            // rejects. The getter keeps the half-built table, so start over without touching the
+            // environment: conan then inherits it unchanged, and its output isn't a TTY anyway.
+            startInfo = CreateStartInfo(fileName, commandLine, workingDirectory);
+        }
 
         var stdout = new StringBuilder();
         using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
@@ -82,6 +85,18 @@ internal static class ProcessRunner
             lock (stdout) return new ProcessResult(exitCode, stdout.ToString());
         }
     }
+
+    private static ProcessStartInfo CreateStartInfo(string fileName, string commandLine, string? workingDirectory) =>
+        new(fileName, commandLine)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
+            WorkingDirectory = workingDirectory ?? string.Empty,
+        };
 
     /// <summary>Quotes one argument following the CommandLineToArgvW rules.</summary>
     internal static string QuoteArgument(string argument)
