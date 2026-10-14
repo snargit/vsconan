@@ -23,10 +23,16 @@ was deleted), VsConan resumes CMake for it on the next open.
 
 1. Open a folder containing a `conanfile.py` or `conanfile.txt` and a `CMakeLists.txt`
    (**File > Open > Folder**).
-2. **Tools > Conan > Select Profiles...** lists the profiles from `conan profile list`. Pick the
-   host profiles to install and the build profile (`-pr:b`). The choice is saved per user in
-   `.vs/VsConan/settings.json`.
-3. **Tools > Conan > Install Dependencies** runs this for each selected profile:
+2. The first time the folder opens, VsConan pauses CMake and shows a window. It lists the
+   profiles from `conan profile list`. Pick the host profiles to install and the build profile
+   (`-pr:b`), then choose:
+   - **Install** saves the choice per user in `.vs/VsConan/settings.json` and runs step 3.
+   - **Not now** resumes CMake without installing anything.
+
+   Either way, the window isn't shown again for that folder. To change the profiles later, use
+   **Tools > Conan > Select Profiles...**.
+3. VsConan runs this for each selected profile. **Tools > Conan > Install Dependencies** runs it
+   again on demand:
 
    ```
    conan install <folder> -pr:h <profile> -pr:b <build profile> --build=missing --format=json
@@ -40,6 +46,11 @@ was deleted), VsConan resumes CMake for it on the next open.
    writes a single `CMakeUserPresets.json` that includes them. Visual Studio reads that file, so
    each profile appears as a `conan-<profile>-<build type>` configuration. Visual Studio then
    runs the configure and build.
+5. After a folder's first successful install, an info bar offers **Switch to CMake Targets View**.
+   This view lists the project's CMake targets in Solution Explorer, which suits a CMake project
+   better than the default Folder View. The link runs the CMake package's own view-switch
+   command. If that isn't possible, the Conan output pane explains how to switch with Solution
+   Explorer's **Switch Views** button.
 
 ### Ordering: Conan runs before CMake configures
 
@@ -64,7 +75,7 @@ Some cases are best-effort:
 
 - **First open of a fresh clone.** VsConan hasn't paused this folder yet, so the CMake
   integration may start before VsConan loads. VsConan pauses it as soon as it loads, and keeps it
-  paused until profiles are chosen.
+  paused while the first-run window is open.
 - **Folder closed during an install, or VS exits.** The install is cancelled and CMake stays
   paused, so the next open finishes the install first.
 - **Profile edits.** The fingerprint doesn't include the contents of Conan profiles. Run
@@ -104,9 +115,18 @@ The package is written to `src/VsConan/bin/Release/net48/VsConan.vsix`.
 ### Debugging
 
 To debug, open `VsConan.sln` in VS 2022 or VS 2026, make `VsConan` the startup project, and press
-F5. A Debug build inside Visual Studio deploys the extension into that Visual Studio's
-experimental instance (root suffix `Exp`). The **Experimental Instance** profile in
-`src/VsConan/Properties/launchSettings.json` then starts `devenv.exe /rootsuffix Exp`.
+F5. This deploys the extension into that Visual Studio's experimental instance (root suffix `Exp`)
+and launches it. `VsConan` is listed first in the solution so that it becomes the startup project
+by default. If Visual Studio has already saved a different startup project, right-click
+**VsConan** and choose **Set as Startup Project**.
+
+Deploying and launching work differently in each version:
+
+- **VS 2026.** Visual Studio's built-in VSIX debugger deploys and launches the extension. It only
+  deploys if **Deploy** is ticked for `VsConan` in **Build > Configuration Manager**.
+  `VsConan.sln` ticks it for the Debug configurations.
+- **VS 2022.** The Debug build deploys the extension. The **Experimental Instance** profile in
+  `src/VsConan/Properties/launchSettings.json` then starts `devenv.exe /rootsuffix Exp`.
 
 How the build is set up:
 

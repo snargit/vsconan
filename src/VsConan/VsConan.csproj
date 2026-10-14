@@ -19,10 +19,12 @@
   </PropertyGroup>
 
   <!--
-    F5: deploy the extension into the experimental instance ("Exp" root suffix) of the VS doing the
-    build, then launch it via the profile in Properties/launchSettings.json.
+    F5 deploys the extension into the experimental instance ("Exp" root suffix) and launches it.
+    VS 2026: its VSIX project system (DebuggerFlavor=VsixDebugger, set by the 18.x tools) deploys and
+      launches, provided Deploy is ticked for this project in Configuration Manager (VsConan.sln).
+    VS 2022: the build deploys (below) and Properties/launchSettings.json launches.
   -->
-  <PropertyGroup Condition="'$(BuildingInsideVisualStudio)' == 'true' and '$(Configuration)' == 'Debug'">
+  <PropertyGroup Condition="'$(BuildingInsideVisualStudio)' == 'true' and '$(Configuration)' == 'Debug' and '$(VisualStudioVersion)' == '17.0'">
     <DeployExtension>true</DeployExtension>
   </PropertyGroup>
   <PropertyGroup>

@@ -63,11 +63,7 @@ internal sealed class ConanController
             var settings = VsConanSettings.Load(project.RootDirectory);
             if (settings.HostProfiles.Count == 0)
             {
-                // Configuring now would run without the Conan toolchain, so stay paused until profiles are chosen.
-                new CMakeGate(project.RootDirectory).Close();
-                _output.WriteLine($"Found {project.ConanfilePath}. CMake integration is paused until Conan profiles "
-                    + "are chosen: Tools > Conan > Select Profiles...");
-                await _output.ActivateAsync();
+                await RunFirstTimeSetupAsync(project, settings, cancellationToken);
                 return;
             }
 
@@ -77,6 +73,51 @@ internal sealed class ConanController
         {
             ReportException(ex);
         }
+    }
+
+    /// <summary>
+    /// The first time a Conan folder opens, asks for profiles in a window rather than pointing at the
+    /// menu. Shown once per folder: after "Not now", the folder opens normally and the menu is the way in.
+    /// </summary>
+    private async Task RunFirstTimeSetupAsync(ConanProject project, VsConanSettings settings, CancellationToken cancellationToken)
+    {
+        var directory = project.RootDirectory;
+        var gate = new CMakeGate(directory);
+        if (VsConanState.Load(directory).FirstRunPromptShown)
+        {
+            gate.Open();
+            return;
+        }
+
+        // Configuring now would run without the Conan toolchain, so pause while the user decides.
+        gate.Close();
+
+        VsConanSettings? chosen = null;
+        try
+        {
+            chosen = await PromptForSettingsAsync(project, settings, cancellationToken, firstRun: true);
+
+            // Recorded only once the prompt has run, so a failure to list profiles (e.g. Conan not on
+            // PATH) means the window is offered again next time.
+            var state = VsConanState.Load(directory);
+            state.FirstRunPromptShown = true;
+            state.Save(directory);
+        }
+        finally
+        {
+            if (chosen is null)
+            {
+                gate.Open();
+            }
+        }
+
+        if (chosen is null)
+        {
+            _output.WriteLine("Conan dependencies weren't installed. To set them up later, use Tools > Conan > Select Profiles...");
+            return;
+        }
+
+        await SyncAsync(project, chosen, force: false);
     }
 
     /// <summary>
@@ -180,6 +221,7 @@ internal sealed class ConanController
             await TaskScheduler.Default;
             var result = await new DependencySync(_cli).RunAsync(project, settings, force, _output.WriteLine, cancellationToken);
             ReportResult(result);
+            await OfferTargetsViewOnceAsync(project, result);
 
             if (willInstall)
             {
@@ -202,9 +244,31 @@ internal sealed class ConanController
         }
     }
 
+    /// <summary>
+    /// After a folder's first successful install, offers to switch Solution Explorer to the CMake
+    /// Targets View (the Folder View is the default). Offered once per folder.
+    /// </summary>
+    private async Task OfferTargetsViewOnceAsync(ConanProject project, SyncResult result)
+    {
+        if (!result.Profiles.Any(r => r.Succeeded))
+        {
+            return;
+        }
+
+        var state = VsConanState.Load(project.RootDirectory);
+        if (state.TargetsViewHintShown)
+        {
+            return;
+        }
+
+        state.TargetsViewHintShown = true;
+        state.Save(project.RootDirectory);
+        await TargetsViewInfoBar.ShowAsync(_package, _output);
+    }
+
     /// <summary>Shows the profile picker; saves and returns the new settings, or null if cancelled.</summary>
     private async Task<VsConanSettings?> PromptForSettingsAsync(
-        ConanProject project, VsConanSettings current, CancellationToken cancellationToken)
+        ConanProject project, VsConanSettings current, CancellationToken cancellationToken, bool firstRun = false)
     {
         await TaskScheduler.Default;
         var profiles = await _cli.ListProfilesAsync(cancellationToken);
@@ -217,7 +281,7 @@ internal sealed class ConanController
             return null;
         }
 
-        var dialog = new ProfileSelectionDialog(profiles, current);
+        var dialog = new ProfileSelectionDialog(profiles, current, firstRun ? project : null);
         if (dialog.ShowModal() != true)
         {
             return null;

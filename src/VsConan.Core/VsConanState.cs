@@ -13,6 +13,17 @@ public sealed class VsConanState
     [JsonProperty("cmakeGateClosed")]
     public bool CMakeGateClosed { get; set; }
 
+    /// <summary>
+    /// True once the first-run profile window has been shown for this folder, whatever the user
+    /// chose. After that, profile changes go through the Tools > Conan menu.
+    /// </summary>
+    [JsonProperty("firstRunPromptShown")]
+    public bool FirstRunPromptShown { get; set; }
+
+    /// <summary>True once the "switch to CMake Targets View" info bar has been offered for this folder.</summary>
+    [JsonProperty("targetsViewHintShown")]
+    public bool TargetsViewHintShown { get; set; }
+
     /// <summary><see cref="InstallFingerprint"/> of the last fully successful install.</summary>
     [JsonProperty("installFingerprint")]
     public string? InstallFingerprint { get; set; }

@@ -18,11 +18,14 @@ A minimal setup for trying VsConan by hand. It's fully local and needs no Conan 
 
 2. In the Visual Studio experimental instance (press F5 on `VsConan.sln`), open `samples/hello-app`
    with **File > Open > Folder**.
-3. VsConan reports that CMake is paused until profiles are chosen. Run
-   **Tools > Conan > Select Profiles...** and pick one or more host profiles.
+3. VsConan pauses CMake and opens a window that asks which Conan profiles to install. Pick one or
+   more host profiles and click **Install**. This window only appears on the first open; after
+   that, use **Tools > Conan > Select Profiles...**.
 4. VsConan runs `conan install` for each profile. `--build=missing` builds `greeting` from source
    for each profile. VsConan then writes `CMakeUserPresets.json` and resumes CMake.
-5. Pick a `conan-<profile>-<build type>` configuration from the toolbar, then build and run
+5. When the info bar appears, click **Switch to CMake Targets View** to see `hello-app` as a CMake
+   target in Solution Explorer. The link works once CMake has finished configuring.
+6. Pick a `conan-<profile>-<build type>` configuration from the toolbar, then build and run
    `hello-app.exe`. It prints the build type of the `greeting` it linked against, e.g.
    `Hello, VsConan! (greeting Debug build)`.
 
@@ -41,5 +44,6 @@ A minimal setup for trying VsConan by hand. It's fully local and needs no Conan 
 ## Resetting
 
 To start over, remove the generated files from `hello-app` (`build/`, `CMakeUserPresets.json`, and
-`.vs/` for VsConan's state and the CMake pause). To remove the package from the cache, run
+`.vs/` for VsConan's state and the CMake pause). Deleting `.vs/VsConan/` alone is enough to see the
+first-run window again. To remove the package from the cache, run
 `conan remove "greeting/*" -c`.

@@ -274,6 +274,24 @@ public class ConanProjectTests
     }
 }
 
+public class VsConanStateTests
+{
+    [Fact]
+    public void SaveThenLoad_RoundTrips()
+    {
+        using var dir = new TempDirectory();
+        Assert.False(VsConanState.Load(dir.Path).FirstRunPromptShown);
+
+        new VsConanState { FirstRunPromptShown = true, TargetsViewHintShown = true, CMakeGateClosed = true, InstallFingerprint = "abc" }.Save(dir.Path);
+
+        var loaded = VsConanState.Load(dir.Path);
+        Assert.True(loaded.FirstRunPromptShown);
+        Assert.True(loaded.TargetsViewHintShown);
+        Assert.True(loaded.CMakeGateClosed);
+        Assert.Equal("abc", loaded.InstallFingerprint);
+    }
+}
+
 public class VsConanSettingsTests
 {
     [Fact]
