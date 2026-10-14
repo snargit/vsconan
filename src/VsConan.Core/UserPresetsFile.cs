@@ -53,6 +53,28 @@ public static class UserPresetsFile
             .ToList() ?? new List<string>();
     }
 
+    /// <summary>Names of the configure presets in a Conan-generated CMakePresets.json; empty if it can't be read.</summary>
+    public static IReadOnlyList<string> ReadConfigurePresetNames(string presetsFile)
+    {
+        try
+        {
+            var presets = JObject.Parse(File.ReadAllText(presetsFile))["configurePresets"] as JArray;
+            return presets?
+                .Select(preset => (string?)preset["name"])
+                .Where(name => !string.IsNullOrEmpty(name))
+                .Select(name => name!)
+                .ToList() ?? new List<string>();
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            return Array.Empty<string>();
+        }
+    }
+
+    /// <summary>Configure presets from the files CMakeUserPresets.json currently includes.</summary>
+    public static IReadOnlyList<string> CurrentConfigurePresetNames(string projectDirectory) =>
+        ReadIncludes(projectDirectory).SelectMany(ReadConfigurePresetNames).ToList();
+
     /// <summary>Writes the file so it includes exactly <paramref name="presetsFiles"/>.</summary>
     /// <returns>True if the file changed.</returns>
     public static bool Write(string projectDirectory, IEnumerable<string> presetsFiles)

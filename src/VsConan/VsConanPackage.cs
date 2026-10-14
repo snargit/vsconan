@@ -29,8 +29,9 @@ public sealed class VsConanPackage : AsyncPackage
         var commandService = (OleMenuCommandService?)await GetServiceAsync(typeof(IMenuCommandService))
             ?? throw new InvalidOperationException("IMenuCommandService is unavailable.");
 
-        AddCommand(commandService, PackageIds.InstallDependenciesCommand, () => controller.InstallAsync(DisposalToken));
-        AddCommand(commandService, PackageIds.SelectProfilesCommand, () => controller.SelectProfilesAsync(DisposalToken));
+        AddCommand(commandService, PackageIds.InstallDependenciesCommand, args => controller.InstallAsync(args, DisposalToken));
+        AddCommand(commandService, PackageIds.SelectProfilesCommand, args => controller.SelectProfilesAsync(args, DisposalToken));
+        AddCommand(commandService, PackageIds.ShowStatusCommand, controller.ShowStatusAsync);
 
         _solution = (IVsSolution?)await GetServiceAsync(typeof(SVsSolution))
             ?? throw new InvalidOperationException("SVsSolution is unavailable.");
@@ -49,11 +50,19 @@ public sealed class VsConanPackage : AsyncPackage
         }
     }
 
-    /// <summary>Adds a command that is only visible when the open folder is a Conan CMake project.</summary>
-    private void AddCommand(OleMenuCommandService commandService, int id, Func<Task> execute)
+    /// <summary>
+    /// Adds a command that is only visible (and enabled) when the open folder is a Conan CMake project.
+    /// <paramref name="execute"/> gets the command's arguments: null from the menu, the argument string
+    /// when automation runs it by name (e.g. DTE.ExecuteCommand("Conan.InstallDependencies", "/id:42")).
+    /// </summary>
+    private void AddCommand(OleMenuCommandService commandService, int id, Func<string?, Task> execute)
     {
         var command = new OleMenuCommand(
-            (_, _) => _ = JoinableTaskFactory.RunAsync(execute),
+            (_, e) =>
+            {
+                var arguments = (e as OleMenuCmdEventArgs)?.InValue as string;
+                _ = JoinableTaskFactory.RunAsync(() => execute(arguments));
+            },
             new CommandID(PackageGuids.CommandSet, id));
         command.BeforeQueryStatus += (_, _) => command.Visible = command.Enabled = _controller?.IsActive == true;
         commandService.AddCommand(command);

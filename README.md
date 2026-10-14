@@ -93,6 +93,99 @@ Some cases are best-effort:
 - The `compiler.version` in each MSVC profile must match a toolset that's installed (e.g. 194 for
   VS 2022, 195 for VS 2026). Conan writes that toolset into the preset.
 
+## Automation
+
+VsConan's commands have fixed names and accept arguments. So anything that can drive Visual
+Studio through its automation object (`EnvDTE.DTE`) can select profiles, install dependencies
+and read the status, without any UI. That includes scripts, other extensions and MCP servers.
+VsConan doesn't ship an MCP server itself; this section is the contract for writing one.
+
+### Commands
+
+| Command | Arguments | Effect |
+| --- | --- | --- |
+| `Conan.ShowStatus` | `[/id:<token>]` | Reports the folder's status: selected profiles, whether the last install is up to date, whether CMake is paused, the `conan-*` configure presets, and `conan profile list`. Also prints it to the **Conan** output pane. |
+| `Conan.SelectProfiles` | `<host profile>... [/build:<profile>] [/id:<token>]` | Saves the profiles to install, checked against `conan profile list`. It doesn't install; run `Conan.InstallDependencies` next. |
+| `Conan.InstallDependencies` | `[/force] [/id:<token>]` | Runs the installs for the saved profiles and writes `CMakeUserPresets.json`. Visual Studio then configures. `/force` reinstalls even if nothing has changed. |
+
+Argument syntax:
+
+- Host profiles are separated by spaces or commas. Switches start with `/`, and unknown switches
+  are reported as errors.
+- **Any** argument switches the command to automation mode: no dialogs, and the outcome goes to
+  the result file. To run `Conan.InstallDependencies` or `Conan.ShowStatus` with nothing else
+  to say, pass `/id:<token>`.
+- Without arguments, `Conan.InstallDependencies` and `Conan.SelectProfiles` behave exactly like
+  the **Tools > Conan** menu items, dialogs included.
+
+The commands are only enabled while the open folder is one VsConan manages. That means a
+folder opened with **File > Open > Folder** whose root has a conanfile and a `CMakeLists.txt`.
+Otherwise `ExecuteCommand` fails with "Command ... is not available". `ExecuteCommand` also
+can't run while a modal dialog is open, such as VsConan's first-run window.
+
+### Results
+
+Visual Studio commands can't return values, and installs take a while. So each command run with
+arguments writes `<folder>/.vs/VsConan/command-result.json`. It writes the file when the command
+starts, and again when it finishes:
+
+```json
+{
+  "id": "42",
+  "command": "Conan.InstallDependencies",
+  "state": "succeeded",
+  "startedAt": "2026-10-14T16:20:01.123+01:00",
+  "completedAt": "2026-10-14T16:20:31.456+01:00",
+  "result": {
+    "outcome": "installed",
+    "profiles": [ { "profile": "default", "succeeded": true, "exitCode": 0 } ],
+    "configurePresets": [ "conan-default-release" ]
+  }
+}
+```
+
+- `state` is `running`, then `succeeded` or `failed`. When it's `failed`, `error` holds a message
+  meant for the caller, such as `Unknown Conan profile(s): clang. Available profiles: default, debug.`
+- `id` echoes `/id:<token>`. Only the most recent command's result is kept, so poll until both
+  `id` matches your token and `state` isn't `running`.
+- `result` depends on the command:
+  - `Conan.ShowStatus` and `Conan.SelectProfiles` give a **status**: `folder`, `conanfile`,
+    `usesCmakeLayout`, `hostProfiles`, `buildProfile`, `upToDate`, `cmakePaused`,
+    `configurePresets` and `availableProfiles`.
+  - `Conan.InstallDependencies` gives an **install report**: `outcome` (`installed`, `upToDate`,
+    `partiallyFailed` or `userPresetsNotOwned`), `profiles` and `configurePresets`.
+
+Each command also writes a one-line summary to the **Conan** output pane.
+
+### Example
+
+From Windows PowerShell 5.1, which provides `Marshal.GetActiveObject`. Use
+`VisualStudio.DTE.17.0` for VS 2022 and `VisualStudio.DTE.18.0` for VS 2026.
+
+```powershell
+$dte = [Runtime.InteropServices.Marshal]::GetActiveObject('VisualStudio.DTE.18.0')
+$folder = Split-Path $dte.Solution.FullName   # in Open Folder mode, this is the opened folder
+
+function Invoke-Conan($command, $arguments) {
+    $id = [guid]::NewGuid().ToString('N')
+    $dte.ExecuteCommand($command, "$arguments /id:$id")
+    $path = Join-Path $folder '.vs\VsConan\command-result.json'
+    do {
+        Start-Sleep -Milliseconds 500
+        $result = Get-Content $path -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
+    } until ($result.id -eq $id -and $result.state -ne 'running')
+    $result
+}
+
+Invoke-Conan 'Conan.ShowStatus' ''
+Invoke-Conan 'Conan.SelectProfiles' 'default debug /build:default'
+Invoke-Conan 'Conan.InstallDependencies' ''
+```
+
+`GetActiveObject` returns whichever instance of that Visual Studio version registered first. To
+target a particular instance, look up its `!VisualStudio.DTE.<version>:<process id>` entry in the
+Running Object Table. MCP servers that work with several instances need to do this.
+
 ## Repository layout
 
 | Path | Description |

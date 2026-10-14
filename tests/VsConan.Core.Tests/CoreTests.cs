@@ -318,3 +318,131 @@ public class VsConanSettingsTests
         Assert.True(File.Exists(Path.Combine(dir.Path, ".vs", "VsConan", "settings.json")));
     }
 }
+
+public class AutomationArgumentsTests
+{
+    [Fact]
+    public void Parse_SplitsProfilesAndSwitches()
+    {
+        var args = AutomationArguments.Parse("default, debug /build:gcc /FORCE /id:req-7");
+
+        Assert.Equal(new[] { "default", "debug" }, args.HostProfiles);
+        Assert.Equal("gcc", args.BuildProfile);
+        Assert.True(args.Force);
+        Assert.Equal("req-7", args.RequestId);
+        Assert.Empty(args.Errors);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Parse_EmptyHasNothing(string? text)
+    {
+        var args = AutomationArguments.Parse(text);
+
+        Assert.Empty(args.HostProfiles);
+        Assert.Null(args.BuildProfile);
+        Assert.False(args.Force);
+        Assert.Null(args.RequestId);
+        Assert.Empty(args.Errors);
+    }
+
+    [Theory]
+    [InlineData("/verbose")]
+    [InlineData("/id:")]
+    [InlineData("/build")]
+    [InlineData("/force:yes")]
+    public void Parse_ReportsBadSwitches(string text)
+    {
+        var error = Assert.Single(AutomationArguments.Parse(text).Errors);
+        Assert.Contains(text, error);
+    }
+}
+
+public class ProfileChoiceTests
+{
+    private static readonly string[] Available = { "default", "debug", "gcc-13" };
+
+    [Fact]
+    public void Validate_AcceptsKnownProfilesAndRemovesDuplicates()
+    {
+        Assert.Null(ProfileChoice.Validate(Available, new[] { "debug", " debug ", "default" }, "default", out var hosts));
+        Assert.Equal(new[] { "debug", "default" }, hosts);
+    }
+
+    [Fact]
+    public void Validate_RejectsEmptyHosts()
+    {
+        Assert.Equal("Choose at least one host profile.", ProfileChoice.Validate(Available, new[] { " " }, "default", out _));
+    }
+
+    [Fact]
+    public void Validate_NamesUnknownProfilesAndListsAvailable()
+    {
+        var error = ProfileChoice.Validate(Available, new[] { "debug", "clang" }, "msvc", out _);
+
+        Assert.Equal("Unknown Conan profile(s): clang, msvc. Available profiles: default, debug, gcc-13.", error);
+    }
+}
+
+public class StatusAndResultTests
+{
+    [Fact]
+    public void ReadConfigurePresetNames_ReadsNamesAndToleratesBadFiles()
+    {
+        using var dir = new TempDirectory();
+        var presets = dir.Write("CMakePresets.json", "{ \"configurePresets\": [ { \"name\": \"conan-default-release\" } ] }");
+
+        Assert.Equal(new[] { "conan-default-release" }, UserPresetsFile.ReadConfigurePresetNames(presets));
+        Assert.Empty(UserPresetsFile.ReadConfigurePresetNames(dir.Write("broken.json", "{")));
+        Assert.Empty(UserPresetsFile.ReadConfigurePresetNames(Path.Combine(dir.Path, "missing.json")));
+    }
+
+    [Fact]
+    public void ProjectStatus_ReflectsSettingsPresetsAndPause()
+    {
+        using var dir = new TempDirectory();
+        dir.Write("CMakeLists.txt");
+        dir.Write("conanfile.txt", "[layout]\ncmake_layout\n");
+        var presets = dir.Write(Path.Combine("build", "default", "Release", "generators", "CMakePresets.json"),
+            "{ \"configurePresets\": [ { \"name\": \"conan-default-release\" } ] }");
+        UserPresetsFile.Write(dir.Path, new[] { presets });
+        new VsConanSettings { HostProfiles = { "default" } }.Save(dir.Path);
+        new CMakeGate(dir.Path).Close();
+
+        var status = ProjectStatus.Create(ConanProject.Find(dir.Path)!, new[] { "default", "debug" });
+
+        Assert.Equal("conanfile.txt", status.Conanfile);
+        Assert.True(status.UsesCmakeLayout);
+        Assert.Equal(new[] { "default" }, status.HostProfiles);
+        Assert.False(status.UpToDate); // no install recorded yet
+        Assert.True(status.CMakePaused);
+        Assert.Equal(new[] { "conan-default-release" }, status.ConfigurePresets);
+        Assert.Equal(new[] { "default", "debug" }, status.AvailableProfiles);
+    }
+
+    [Fact]
+    public void CommandResult_WritesTheDocumentedJson()
+    {
+        using var dir = new TempDirectory();
+        new CommandResult
+        {
+            Id = "42",
+            Command = "Conan.SelectProfiles",
+            State = CommandResult.Failed,
+            StartedAt = DateTimeOffset.Now,
+            CompletedAt = DateTimeOffset.Now,
+            Error = "Choose at least one host profile.",
+        }.Save(dir.Path);
+
+        var json = Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText(CommandResult.GetPath(dir.Path)));
+
+        Assert.Equal("42", (string?)json["id"]);
+        Assert.Equal("Conan.SelectProfiles", (string?)json["command"]);
+        Assert.Equal("failed", (string?)json["state"]);
+        Assert.Equal("Choose at least one host profile.", (string?)json["error"]);
+        Assert.NotNull(json["startedAt"]);
+        Assert.Null(json["result"]);
+    }
+}

@@ -23,23 +23,43 @@
       </Group>
     </Groups>
 
+    <!--
+      Each command has a canonical name, so automation can run it with arguments:
+        DTE.ExecuteCommand("Conan.InstallDependencies", "/id:42")
+      With arguments the commands run without UI and report to .vs/VsConan/command-result.json
+      (see "Automation" in README.md). Without, they behave as the menu items.
+      They're hidden, and disabled for automation, unless the open folder is a Conan CMake
+      project (see VsConanPackage.AddCommand).
+    -->
     <Buttons>
       <Button guid="guidVsConanCmdSet" id="InstallDependenciesCommandId" priority="0x0100" type="Button">
         <Parent guid="guidVsConanCmdSet" id="ConanMenuGroup" />
-        <!-- Hidden unless the open folder is a Conan CMake project (see VsConanPackage.AddCommand). -->
         <CommandFlag>DynamicVisibility</CommandFlag>
         <CommandFlag>DefaultInvisible</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
         <Strings>
           <ButtonText>Install Dependencies</ButtonText>
+          <CanonicalName>.Conan.InstallDependencies</CanonicalName>
         </Strings>
       </Button>
       <Button guid="guidVsConanCmdSet" id="SelectProfilesCommandId" priority="0x0200" type="Button">
         <Parent guid="guidVsConanCmdSet" id="ConanMenuGroup" />
-        <!-- Hidden unless the open folder is a Conan CMake project (see VsConanPackage.AddCommand). -->
         <CommandFlag>DynamicVisibility</CommandFlag>
         <CommandFlag>DefaultInvisible</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
         <Strings>
           <ButtonText>Select Profiles...</ButtonText>
+          <CanonicalName>.Conan.SelectProfiles</CanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidVsConanCmdSet" id="ShowStatusCommandId" priority="0x0300" type="Button">
+        <Parent guid="guidVsConanCmdSet" id="ConanMenuGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <CommandFlag>DefaultInvisible</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>Show Status</ButtonText>
+          <CanonicalName>.Conan.ShowStatus</CanonicalName>
         </Strings>
       </Button>
     </Buttons>
@@ -53,6 +73,7 @@
       <IDSymbol name="ConanMenuGroup" value="0x1021" />
       <IDSymbol name="InstallDependenciesCommandId" value="0x0100" />
       <IDSymbol name="SelectProfilesCommandId" value="0x0101" />
+      <IDSymbol name="ShowStatusCommandId" value="0x0102" />
     </GuidSymbol>
   </Symbols>
 

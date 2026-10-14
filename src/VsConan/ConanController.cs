@@ -7,6 +7,7 @@ using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Threading;
+using Newtonsoft.Json;
 using VsConan.Core;
 using Task = System.Threading.Tasks.Task;
 
@@ -143,7 +144,28 @@ internal sealed class ConanController
         }
     }
 
-    public async Task InstallAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// Conan.InstallDependencies. With arguments (automation) it runs without UI and reports to
+    /// <see cref="CommandResult"/>; without, it's the menu command.
+    /// </summary>
+    public Task InstallAsync(string? arguments, CancellationToken cancellationToken) =>
+        IsAutomation(arguments)
+            ? RunAutomationAsync("Conan.InstallDependencies", arguments!, AutomateInstallAsync)
+            : InstallInteractiveAsync(cancellationToken);
+
+    /// <summary>Conan.SelectProfiles. With arguments it saves the given profiles without UI (and doesn't install).</summary>
+    public Task SelectProfilesAsync(string? arguments, CancellationToken cancellationToken) =>
+        IsAutomation(arguments)
+            ? RunAutomationAsync("Conan.SelectProfiles", arguments!, AutomateSelectProfilesAsync)
+            : SelectProfilesInteractiveAsync(cancellationToken);
+
+    /// <summary>Conan.ShowStatus: writes the status to the Conan output pane, and to <see cref="CommandResult"/>.</summary>
+    public Task ShowStatusAsync(string? arguments) =>
+        RunAutomationAsync("Conan.ShowStatus", arguments ?? string.Empty, AutomateShowStatusAsync, showOutput: true);
+
+    private static bool IsAutomation(string? arguments) => !string.IsNullOrWhiteSpace(arguments);
+
+    private async Task InstallInteractiveAsync(CancellationToken cancellationToken)
     {
         try
         {
@@ -171,7 +193,7 @@ internal sealed class ConanController
         }
     }
 
-    public async Task SelectProfilesAsync(CancellationToken cancellationToken)
+    private async Task SelectProfilesInteractiveAsync(CancellationToken cancellationToken)
     {
         try
         {
@@ -194,12 +216,136 @@ internal sealed class ConanController
         }
     }
 
+    /// <summary>
+    /// Runs a command for automation: no UI, and the outcome is written to .vs/VsConan/command-result.json
+    /// ("running", then "succeeded" or "failed") because VS commands can't return values.
+    /// </summary>
+    private async Task RunAutomationAsync(
+        string command,
+        string arguments,
+        Func<ConanProject, AutomationArguments, Task<object>> body,
+        bool showOutput = false)
+    {
+        var parsed = AutomationArguments.Parse(arguments);
+        var project = ConanProject.Find(_openFolder);
+        if (project is null)
+        {
+            // Not reachable through VS (the commands are disabled then), but keep a trace if it is.
+            _output.WriteLine($"{command}: no Conan CMake project is open.");
+            return;
+        }
+
+        var directory = project.RootDirectory;
+        var result = new CommandResult { Id = parsed.RequestId, Command = command, StartedAt = DateTimeOffset.Now };
+        try
+        {
+            result.Save(directory);
+            if (parsed.Errors.Count > 0)
+            {
+                throw new AutomationException(string.Join(" ", parsed.Errors));
+            }
+
+            result.Result = await body(project, parsed);
+            result.State = CommandResult.Succeeded;
+        }
+        catch (Exception ex)
+        {
+            result.State = CommandResult.Failed;
+            result.Error = DescribeForCaller(ex);
+        }
+
+        result.CompletedAt = DateTimeOffset.Now;
+        result.Save(directory);
+
+        var id = parsed.RequestId is null ? string.Empty : $" [{parsed.RequestId}]";
+        _output.WriteLine($"{command}{id}: {result.State}{(result.Error is null ? string.Empty : $": {result.Error}")}");
+        if (showOutput && result.Result is not null)
+        {
+            _output.WriteLine(JsonConvert.SerializeObject(result.Result, Formatting.Indented));
+            await _output.ActivateAsync();
+        }
+    }
+
+    private async Task<object> AutomateSelectProfilesAsync(ConanProject project, AutomationArguments arguments)
+    {
+        if (arguments.HostProfiles.Count == 0)
+        {
+            throw new AutomationException(
+                "Pass the host profiles to install, e.g. Conan.SelectProfiles default debug /build:default.");
+        }
+
+        await TaskScheduler.Default;
+        var available = await _cli.ListProfilesAsync(_folderSession.Token);
+        var current = VsConanSettings.Load(project.RootDirectory);
+        var buildProfile = arguments.BuildProfile ?? current.BuildProfile;
+        var error = ProfileChoice.Validate(available, arguments.HostProfiles, buildProfile, out var hosts);
+        if (error is not null)
+        {
+            throw new AutomationException(error);
+        }
+
+        new VsConanSettings { HostProfiles = hosts, BuildProfile = buildProfile }.Save(project.RootDirectory);
+
+        // Profiles are chosen now, so the first-run window has nothing left to offer.
+        var state = VsConanState.Load(project.RootDirectory);
+        state.FirstRunPromptShown = true;
+        state.Save(project.RootDirectory);
+
+        return ProjectStatus.Create(project, available);
+    }
+
+    private async Task<object> AutomateInstallAsync(ConanProject project, AutomationArguments arguments)
+    {
+        var settings = VsConanSettings.Load(project.RootDirectory);
+        if (settings.HostProfiles.Count == 0)
+        {
+            throw new AutomationException(
+                "No Conan profiles are selected for this folder. Run Conan.SelectProfiles <profiles> first.");
+        }
+
+        var result = await SyncCoreAsync(project, settings, arguments.Force);
+        return InstallReport.Create(project, result);
+    }
+
+    private async Task<object> AutomateShowStatusAsync(ConanProject project, AutomationArguments arguments)
+    {
+        await TaskScheduler.Default;
+        var available = await _cli.ListProfilesAsync(_folderSession.Token);
+        return ProjectStatus.Create(project, available);
+    }
+
+    private string DescribeForCaller(Exception ex) => ex switch
+    {
+        AutomationException or InvalidOperationException => ex.Message,
+        OperationCanceledException => "Cancelled: the folder is closing or Visual Studio is exiting.",
+        Win32Exception => $"Could not run '{_cli.Executable}': {ex.Message}. Make sure Conan 2 is installed and on PATH.",
+        _ => ex.Message,
+    };
+
+    private const string AlreadyRunning = "A Conan install is already running.";
+
+    /// <summary>The menu commands' install: reports to the Conan output pane rather than throwing.</summary>
     private async Task SyncAsync(ConanProject project, VsConanSettings settings, bool force)
+    {
+        try
+        {
+            await SyncCoreAsync(project, settings, force);
+        }
+        catch (OperationCanceledException)
+        {
+            _output.WriteLine("Conan install cancelled; it will run again the next time this folder opens.");
+        }
+        catch (InvalidOperationException ex) when (ex.Message == AlreadyRunning)
+        {
+            _output.WriteLine(ex.Message);
+        }
+    }
+
+    private async Task<SyncResult> SyncCoreAsync(ConanProject project, VsConanSettings settings, bool force)
     {
         if (Interlocked.Exchange(ref _busy, 1) == 1)
         {
-            _output.WriteLine("A Conan install is already running.");
-            return;
+            throw new InvalidOperationException(AlreadyRunning);
         }
 
         var cancellationToken = _folderSession.Token;
@@ -233,10 +379,8 @@ internal sealed class ConanController
                     _ => "Conan: install skipped",
                 });
             }
-        }
-        catch (OperationCanceledException)
-        {
-            _output.WriteLine("Conan install cancelled; it will run again the next time this folder opens.");
+
+            return result;
         }
         finally
         {
@@ -364,6 +508,15 @@ internal sealed class ConanController
         if (await _package.GetServiceAsync(typeof(SVsStatusbar)) is IVsStatusbar statusBar)
         {
             statusBar.SetText(text);
+        }
+    }
+
+    /// <summary>A problem with an automation request; the message is for the caller.</summary>
+    private sealed class AutomationException : Exception
+    {
+        public AutomationException(string message)
+            : base(message)
+        {
         }
     }
 }

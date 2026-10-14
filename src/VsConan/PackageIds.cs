@@ -15,4 +15,5 @@ internal static class PackageIds
 {
     public const int InstallDependenciesCommand = 0x0100;
     public const int SelectProfilesCommand = 0x0101;
+    public const int ShowStatusCommand = 0x0102;
 }
