@@ -99,8 +99,35 @@ The VSIX needs full MSBuild, from a Visual Studio 2022+ installation with the
 msbuild VsConan.sln -restore -p:Configuration=Release
 ```
 
-The package is written to `src/VsConan/bin/Release/net48/VsConan.vsix`. To debug, open
-`VsConan.sln` in Visual Studio and press F5 to launch the experimental instance.
+The package is written to `src/VsConan/bin/Release/net48/VsConan.vsix`.
+
+### Debugging
+
+To debug, open `VsConan.sln` in VS 2022 or VS 2026, make `VsConan` the startup project, and press
+F5. A Debug build inside Visual Studio deploys the extension into that Visual Studio's
+experimental instance (root suffix `Exp`). The **Experimental Instance** profile in
+`src/VsConan/Properties/launchSettings.json` then starts `devenv.exe /rootsuffix Exp`.
+
+How the build is set up:
+
+- **BuildTools version.** The project uses `Microsoft.VSSDK.BuildTools` 17.x under VS 2022 and
+  18.x under VS 2026. The deploy tasks load the building Visual Studio's own assemblies, so a
+  single version can't deploy to both.
+- **Explicit SDK imports.** The 17.x tools need their targets imported after the .NET SDK's.
+  That's why `VsConan.csproj` imports `Sdk.props`/`Sdk.targets` explicitly instead of using
+  `<Project Sdk=...>`.
+- **Deployment.** Command-line builds only produce the `.vsix`; they never deploy it.
+
+If deployment fails with `VSSDK1031: Extension '...' could not be found`, the experimental
+instance is stale. Reset it from a Developer Command Prompt for that Visual Studio, then press F5
+again:
+
+```
+CreateExpInstance /Reset /VSInstance=<version>_<instance id> /RootSuffix=Exp
+```
+
+The `<version>_<instance id>` part is the experimental hive's folder name under
+`%LOCALAPPDATA%\Microsoft\VisualStudio`, without the `Exp` suffix (for example, `18.0_4e9aa619`).
 
 Core tests run with the .NET SDK alone:
 

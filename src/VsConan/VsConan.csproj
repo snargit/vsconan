@@ -1,4 +1,7 @@
-<Project Sdk="Microsoft.NET.Sdk">
+<Project>
+
+  <!-- Explicit SDK imports so the VS 2022 VSSDK targets can be imported after Sdk.targets (see the end). -->
+  <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
 
   <PropertyGroup>
     <TargetFramework>net48</TargetFramework>
@@ -13,17 +16,26 @@
     <IncludeDebugSymbolsInLocalVSIXDeployment>true</IncludeDebugSymbolsInLocalVSIXDeployment>
     <CopyBuildOutputToOutputDirectory>true</CopyBuildOutputToOutputDirectory>
     <CopyOutputSymbolsToOutputDirectory>true</CopyOutputSymbolsToOutputDirectory>
+  </PropertyGroup>
 
-    <!-- F5 launches the experimental instance. -->
-    <StartAction>Program</StartAction>
-    <StartProgram>$(DevEnvDir)devenv.exe</StartProgram>
-    <StartArguments>/rootsuffix Exp</StartArguments>
+  <!--
+    F5: deploy the extension into the experimental instance ("Exp" root suffix) of the VS doing the
+    build, then launch it via the profile in Properties/launchSettings.json.
+  -->
+  <PropertyGroup Condition="'$(BuildingInsideVisualStudio)' == 'true' and '$(Configuration)' == 'Debug'">
+    <DeployExtension>true</DeployExtension>
+  </PropertyGroup>
+  <PropertyGroup>
+    <!-- Command-line builds only package the VSIX (the 17.x tools would otherwise deploy by default). -->
+    <DeployExtension Condition="'$(DeployExtension)' == ''">false</DeployExtension>
   </PropertyGroup>
 
   <ItemGroup>
     <!-- 17.0 reference assemblies so the extension loads in every VS 2022 and VS 2026 release. -->
     <PackageReference Include="Microsoft.VisualStudio.SDK" Version="17.0.32112.339" ExcludeAssets="runtime" />
-    <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="18.5.40034" PrivateAssets="all" />
+    <!-- The VSIX deploy tasks load the building VS's own assemblies, so VS 2022 needs the 17.x tools. -->
+    <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="17.14.2142" PrivateAssets="all" Condition="'$(VisualStudioVersion)' == '17.0'" />
+    <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="18.5.40034" PrivateAssets="all" Condition="'$(VisualStudioVersion)' != '17.0'" />
   </ItemGroup>
 
   <ItemGroup>
@@ -38,5 +50,14 @@
     <None Include="source.extension.vsixmanifest" SubType="Designer" />
     <VSCTCompile Include="VsConanPackage.vsct" ResourceName="Menus.ctmenu" />
   </ItemGroup>
+
+  <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
+
+  <!--
+    The 18.x tools import their targets via VSSDKBuildToolsAutoSetup; the 17.x tools need it done here,
+    after Sdk.targets, which would otherwise reset the PrepareForRunDependsOn hooks they add.
+  -->
+  <Import Project="$(VSToolsPath)\VSSDK\Microsoft.VsSDK.targets"
+          Condition="'$(VisualStudioVersion)' == '17.0' and Exists('$(VSToolsPath)\VSSDK\Microsoft.VsSDK.targets')" />
 
 </Project>
