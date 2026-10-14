@@ -9,23 +9,25 @@ using Newtonsoft.Json.Linq;
 namespace VsConan.Core;
 
 /// <summary>
-/// Thin wrapper over the Conan 2 command line.
+/// Thin wrapper over the Conan 2 command line. Commands run in <see cref="WorkingDirectory"/> (the
+/// project folder): Conan picks its home, and so its profiles, from a .conanrc in the working
+/// directory or any parent before CONAN_HOME and the default ~/.conan2, so the project's own setup applies.
 /// </summary>
 public sealed class ConanCli
 {
-    public ConanCli(string executable = "conan")
+    public ConanCli(string executable = "conan", string? workingDirectory = null)
     {
         Executable = executable;
+        WorkingDirectory = workingDirectory;
     }
 
     public string Executable { get; }
 
+    public string? WorkingDirectory { get; }
+
     public async Task<IReadOnlyList<string>> ListProfilesAsync(CancellationToken cancellationToken)
     {
-        var result = await ProcessRunner.RunAsync(
-            Executable, new[] { "profile", "list", "--format=json" }, null, null, cancellationToken)
-            .ConfigureAwait(false);
-
+        var result = await RunAsync(new[] { "profile", "list", "--format=json" }, cancellationToken).ConfigureAwait(false);
         if (result.ExitCode != 0)
         {
             throw new InvalidOperationException($"'conan profile list' failed with exit code {result.ExitCode}.");
@@ -33,6 +35,38 @@ public sealed class ConanCli
 
         return ParseProfileList(result.StandardOutput);
     }
+
+    /// <summary>
+    /// The profiles as Conan resolves them for an install (includes, templates and defaults applied),
+    /// as JSON text. Throws if a profile doesn't exist or can't be parsed.
+    /// </summary>
+    public async Task<string> ShowProfilesAsync(string hostProfile, string buildProfile, CancellationToken cancellationToken)
+    {
+        var result = await RunAsync(
+            new[] { "profile", "show", "-pr:h", hostProfile, "-pr:b", buildProfile, "--format=json" }, cancellationToken)
+            .ConfigureAwait(false);
+        if (result.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"'conan profile show' failed for profile '{hostProfile}' (exit code {result.ExitCode}).");
+        }
+
+        return result.StandardOutput.Trim();
+    }
+
+    /// <summary>Conan's home folder (<c>conan config home</c>), which holds the profiles, as seen from <see cref="WorkingDirectory"/>.</summary>
+    public async Task<string> ConfigHomeAsync(CancellationToken cancellationToken)
+    {
+        var result = await RunAsync(new[] { "config", "home" }, cancellationToken).ConfigureAwait(false);
+        if (result.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"'conan config home' failed with exit code {result.ExitCode}.");
+        }
+
+        return result.StandardOutput.Trim();
+    }
+
+    private Task<ProcessResult> RunAsync(IEnumerable<string> arguments, CancellationToken cancellationToken) =>
+        ProcessRunner.RunAsync(Executable, arguments, WorkingDirectory, null, cancellationToken);
 
     /// <summary>Runs the install. Conan's log goes to <paramref name="onOutput"/>; the JSON graph is parsed.</summary>
     public async Task<ProfileInstallResult> InstallAsync(

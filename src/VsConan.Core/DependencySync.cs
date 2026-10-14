@@ -49,19 +49,50 @@ public sealed class DependencySync
         _cli = cli;
     }
 
-    public static bool IsUpToDate(ConanProject project, VsConanSettings settings)
+    /// <summary>
+    /// The fingerprint of the project's current Conan inputs, or null if a selected profile can't be
+    /// resolved (e.g. it was deleted), which callers treat as out of date. <paramref name="cli"/>
+    /// should run in the project folder, so the project's Conan home applies.
+    /// </summary>
+    public static async Task<string?> CurrentFingerprintAsync(
+        ConanProject project, VsConanSettings settings, ConanCli cli, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var home = await cli.ConfigHomeAsync(cancellationToken).ConfigureAwait(false);
+            var profiles = new List<string>();
+            foreach (var host in settings.HostProfiles)
+            {
+                profiles.Add(await cli.ShowProfilesAsync(host, settings.BuildProfile, cancellationToken).ConfigureAwait(false));
+            }
+
+            return InstallFingerprint.Compute(project, settings, new ResolvedConanInputs(home, profiles));
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// True if the last successful install still matches the conanfile, conan.lock, conandata.yml and
+    /// the Conan home and selected profiles as Conan resolves them now. Runs 'conan config home' and
+    /// 'conan profile show' (once per host profile).
+    /// </summary>
+    public static async Task<bool> IsUpToDateAsync(
+        ConanProject project, VsConanSettings settings, ConanCli cli, CancellationToken cancellationToken)
     {
         var state = VsConanState.Load(project.RootDirectory);
-        if (state.InstallFingerprint != InstallFingerprint.Compute(project, settings))
+        var includes = UserPresetsFile.ReadIncludes(project.RootDirectory);
+        if (state.InstallFingerprint is null || includes.Count == 0 || !includes.All(File.Exists))
         {
             return false;
         }
 
-        var includes = UserPresetsFile.ReadIncludes(project.RootDirectory);
-        return includes.Count > 0 && includes.All(File.Exists);
+        return state.InstallFingerprint == await CurrentFingerprintAsync(project, settings, cli, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <param name="force">Install even if <see cref="IsUpToDate"/>.</param>
+    /// <param name="force">Install even if <see cref="IsUpToDateAsync"/>.</param>
     public async Task<SyncResult> RunAsync(
         ConanProject project,
         VsConanSettings settings,
@@ -72,7 +103,7 @@ public sealed class DependencySync
         var directory = project.RootDirectory;
         var gate = new CMakeGate(directory);
 
-        if (!force && IsUpToDate(project, settings))
+        if (!force && await IsUpToDateAsync(project, settings, _cli, cancellationToken).ConfigureAwait(false))
         {
             gate.Open();
             return new SyncResult(SyncOutcome.UpToDate, Array.Empty<ProfileInstallResult>());
@@ -85,6 +116,10 @@ public sealed class DependencySync
             gate.Open();
             return new SyncResult(SyncOutcome.UserPresetsNotOwned, Array.Empty<ProfileInstallResult>());
         }
+
+        // Fingerprint the inputs before installing: if they change during the install, the saved
+        // fingerprint no longer matches them and the next check reports the install as out of date.
+        var fingerprint = await CurrentFingerprintAsync(project, settings, _cli, cancellationToken).ConfigureAwait(false);
 
         gate.Close();
         try
@@ -117,7 +152,7 @@ public sealed class DependencySync
             UserPresetsFile.Write(directory, presets);
 
             var state = VsConanState.Load(directory);
-            state.InstallFingerprint = allSucceeded ? InstallFingerprint.Compute(project, settings) : null;
+            state.InstallFingerprint = allSucceeded ? fingerprint : null;
             state.Save(directory);
 
             return new SyncResult(allSucceeded ? SyncOutcome.Installed : SyncOutcome.PartiallyFailed, results);

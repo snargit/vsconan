@@ -15,6 +15,13 @@ public sealed class VsConanSettings
     [JsonProperty("buildProfile")]
     public string BuildProfile { get; set; } = "default";
 
+    /// <summary>
+    /// Reinstall straight away when the Conan inputs change while the folder is open, instead of
+    /// offering to in an info bar. Set by the info bar's "Always install automatically".
+    /// </summary>
+    [JsonProperty("autoInstallOnChange")]
+    public bool AutoInstallOnChange { get; set; }
+
     public static string GetPath(string projectDirectory) =>
         Path.Combine(projectDirectory, ".vs", "VsConan", "settings.json");
 

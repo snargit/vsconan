@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Newtonsoft.Json;
 
 namespace VsConan.Core;
@@ -83,10 +85,14 @@ public sealed class ProjectStatus
     [JsonProperty("availableProfiles", NullValueHandling = NullValueHandling.Ignore)]
     public List<string>? AvailableProfiles { get; set; }
 
-    public static ProjectStatus Create(ConanProject project, IReadOnlyList<string>? availableProfiles = null)
+    /// <param name="cli">Conan, run in the project folder; used to check whether the install is up to date.</param>
+    public static async Task<ProjectStatus> CreateAsync(
+        ConanProject project, ConanCli cli, IReadOnlyList<string>? availableProfiles, CancellationToken cancellationToken)
     {
         var directory = project.RootDirectory;
         var settings = VsConanSettings.Load(directory);
+        var upToDate = settings.HostProfiles.Count > 0
+            && await DependencySync.IsUpToDateAsync(project, settings, cli, cancellationToken).ConfigureAwait(false);
         return new ProjectStatus
         {
             Folder = directory,
@@ -94,7 +100,7 @@ public sealed class ProjectStatus
             UsesCmakeLayout = project.UsesCmakeLayout,
             HostProfiles = settings.HostProfiles.ToList(),
             BuildProfile = settings.BuildProfile,
-            UpToDate = settings.HostProfiles.Count > 0 && DependencySync.IsUpToDate(project, settings),
+            UpToDate = upToDate,
             CMakePaused = !new CMakeGate(directory).IsCMakeEnabled,
             ConfigurePresets = UserPresetsFile.CurrentConfigurePresetNames(directory).ToList(),
             AvailableProfiles = availableProfiles?.ToList(),

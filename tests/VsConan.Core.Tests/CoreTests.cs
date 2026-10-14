@@ -182,23 +182,49 @@ public class UserPresetsFileTests
 
 public class InstallFingerprintTests
 {
+    private static ResolvedConanInputs Inputs(string home = "/conan-home", params string[] profiles) =>
+        new(home, profiles.Length > 0 ? profiles : new[] { "{\"host\": {}}" });
+
     [Fact]
-    public void Compute_ChangesWithConanfileAndProfiles()
+    public void Compute_ChangesWithProjectFiles()
     {
         using var dir = new TempDirectory();
         dir.Write("CMakeLists.txt");
         var conanfile = dir.Write("conanfile.txt", "[requires]\nzlib/1.3\n");
         var settings = new VsConanSettings { HostProfiles = { "default" } };
+        string Fingerprint() => InstallFingerprint.Compute(ConanProject.Find(dir.Path)!, settings, Inputs());
 
-        var original = InstallFingerprint.Compute(ConanProject.Find(dir.Path)!, settings);
-        Assert.Equal(original, InstallFingerprint.Compute(ConanProject.Find(dir.Path)!, settings));
+        var original = Fingerprint();
+        Assert.Equal(original, Fingerprint());
 
-        settings.HostProfiles.Add("debug");
-        Assert.NotEqual(original, InstallFingerprint.Compute(ConanProject.Find(dir.Path)!, settings));
-
-        settings.HostProfiles.Remove("debug");
         File.WriteAllText(conanfile, "[requires]\nzlib/1.3.1\n");
-        Assert.NotEqual(original, InstallFingerprint.Compute(ConanProject.Find(dir.Path)!, settings));
+        Assert.NotEqual(original, Fingerprint());
+
+        foreach (var name in new[] { "conan.lock", "conandata.yml" })
+        {
+            var before = Fingerprint();
+            dir.Write(name, "something");
+            Assert.NotEqual(before, Fingerprint());
+        }
+    }
+
+    [Fact]
+    public void Compute_ChangesWithProfilesAndConanHome()
+    {
+        using var dir = new TempDirectory();
+        dir.Write("CMakeLists.txt");
+        dir.Write("conanfile.txt", "[requires]\nzlib/1.3\n");
+        var project = ConanProject.Find(dir.Path)!;
+        var settings = new VsConanSettings { HostProfiles = { "default" } };
+        var original = InstallFingerprint.Compute(project, settings, Inputs());
+
+        var twoHosts = new VsConanSettings { HostProfiles = { "default", "debug" } };
+        Assert.NotEqual(original, InstallFingerprint.Compute(project, twoHosts, Inputs("/conan-home", "{}", "{}")));
+        Assert.NotEqual(original, InstallFingerprint.Compute(project, new VsConanSettings { HostProfiles = { "default" }, BuildProfile = "debug" }, Inputs()));
+        // The same profile name resolving differently (the profile, or one it includes, was edited).
+        Assert.NotEqual(original, InstallFingerprint.Compute(project, settings, Inputs("/conan-home", "{\"host\": {\"x\": 1}}")));
+        // A different Conan home (CONAN_HOME or a .conanrc).
+        Assert.NotEqual(original, InstallFingerprint.Compute(project, settings, Inputs("/other-home")));
     }
 }
 
@@ -400,7 +426,7 @@ public class StatusAndResultTests
     }
 
     [Fact]
-    public void ProjectStatus_ReflectsSettingsPresetsAndPause()
+    public async System.Threading.Tasks.Task ProjectStatus_ReflectsSettingsPresetsAndPause()
     {
         using var dir = new TempDirectory();
         dir.Write("CMakeLists.txt");
@@ -411,7 +437,9 @@ public class StatusAndResultTests
         new VsConanSettings { HostProfiles = { "default" } }.Save(dir.Path);
         new CMakeGate(dir.Path).Close();
 
-        var status = ProjectStatus.Create(ConanProject.Find(dir.Path)!, new[] { "default", "debug" });
+        // No install has been recorded, so the status is "not up to date" without running Conan.
+        var status = await ProjectStatus.CreateAsync(
+            ConanProject.Find(dir.Path)!, new ConanCli("conan", dir.Path), new[] { "default", "debug" }, System.Threading.CancellationToken.None);
 
         Assert.Equal("conanfile.txt", status.Conanfile);
         Assert.True(status.UsesCmakeLayout);

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
 using System.Threading;
@@ -22,10 +23,16 @@ internal sealed class ConanController
 {
     private readonly AsyncPackage _package;
     private readonly ConanOutputPane _output;
-    private readonly ConanCli _cli = new();
+    private const string ConanExecutable = "conan";
+
     private CancellationTokenSource _folderSession = new();
     private string? _openFolder;
     private int _busy;
+    private ConanInputWatcher? _watcher;
+    /// <summary>Set when the Conan inputs changed during an install, to recheck when it finishes.</summary>
+    private int _recheckAfterInstall;
+    /// <summary>Set while the out-of-date info bar is showing, so changes don't stack info bars.</summary>
+    private int _prompting;
 
     public ConanController(AsyncPackage package, ConanOutputPane output)
     {
@@ -38,6 +45,9 @@ internal sealed class ConanController
     /// so the commands appear as soon as the files are added.
     /// </summary>
     public bool IsActive => ConanProject.IsConanCMakeProject(_openFolder);
+
+    /// <summary>Conan, run in the project folder so Conan honours a .conanrc there (see <see cref="ConanCli"/>).</summary>
+    private static ConanCli Cli(ConanProject project) => new(ConanExecutable, project.RootDirectory);
 
     /// <summary>
     /// Folders VsConan manages are left with CMake paused when they close (see
@@ -60,6 +70,8 @@ internal sealed class ConanController
                 new CMakeGate(folder).Open();
                 return;
             }
+
+            StartWatching(project);
 
             var settings = VsConanSettings.Load(project.RootDirectory);
             if (settings.HostProfiles.Count == 0)
@@ -129,6 +141,8 @@ internal sealed class ConanController
     {
         _folderSession.Cancel();
         _openFolder = null;
+        _watcher?.Dispose();
+        _watcher = null;
 
         try
         {
@@ -275,7 +289,8 @@ internal sealed class ConanController
         }
 
         await TaskScheduler.Default;
-        var available = await _cli.ListProfilesAsync(_folderSession.Token);
+        var cli = Cli(project);
+        var available = await cli.ListProfilesAsync(_folderSession.Token);
         var current = VsConanSettings.Load(project.RootDirectory);
         var buildProfile = arguments.BuildProfile ?? current.BuildProfile;
         var error = ProfileChoice.Validate(available, arguments.HostProfiles, buildProfile, out var hosts);
@@ -284,14 +299,16 @@ internal sealed class ConanController
             throw new AutomationException(error);
         }
 
-        new VsConanSettings { HostProfiles = hosts, BuildProfile = buildProfile }.Save(project.RootDirectory);
+        current.HostProfiles = hosts;
+        current.BuildProfile = buildProfile;
+        current.Save(project.RootDirectory);
 
         // Profiles are chosen now, so the first-run window has nothing left to offer.
         var state = VsConanState.Load(project.RootDirectory);
         state.FirstRunPromptShown = true;
         state.Save(project.RootDirectory);
 
-        return ProjectStatus.Create(project, available);
+        return await ProjectStatus.CreateAsync(project, cli, available, _folderSession.Token);
     }
 
     private async Task<object> AutomateInstallAsync(ConanProject project, AutomationArguments arguments)
@@ -310,15 +327,16 @@ internal sealed class ConanController
     private async Task<object> AutomateShowStatusAsync(ConanProject project, AutomationArguments arguments)
     {
         await TaskScheduler.Default;
-        var available = await _cli.ListProfilesAsync(_folderSession.Token);
-        return ProjectStatus.Create(project, available);
+        var cli = Cli(project);
+        var available = await cli.ListProfilesAsync(_folderSession.Token);
+        return await ProjectStatus.CreateAsync(project, cli, available, _folderSession.Token);
     }
 
     private string DescribeForCaller(Exception ex) => ex switch
     {
         AutomationException or InvalidOperationException => ex.Message,
         OperationCanceledException => "Cancelled: the folder is closing or Visual Studio is exiting.",
-        Win32Exception => $"Could not run '{_cli.Executable}': {ex.Message}. Make sure Conan 2 is installed and on PATH.",
+        Win32Exception => $"Could not run '{ConanExecutable}': {ex.Message}. Make sure Conan 2 is installed and on PATH.",
         _ => ex.Message,
     };
 
@@ -351,7 +369,9 @@ internal sealed class ConanController
         var cancellationToken = _folderSession.Token;
         try
         {
-            var willInstall = force || !DependencySync.IsUpToDate(project, settings);
+            var cli = Cli(project);
+            await TaskScheduler.Default;
+            var willInstall = force || !await DependencySync.IsUpToDateAsync(project, settings, cli, cancellationToken);
             if (willInstall)
             {
                 if (!project.UsesCmakeLayout)
@@ -365,7 +385,10 @@ internal sealed class ConanController
             }
 
             await TaskScheduler.Default;
-            var result = await new DependencySync(_cli).RunAsync(project, settings, force, _output.WriteLine, cancellationToken);
+            // Already checked above, so either install (force) or just resume CMake (up to date).
+            var result = willInstall
+                ? await new DependencySync(cli).RunAsync(project, settings, force: true, _output.WriteLine, cancellationToken)
+                : UpToDate(project);
             ReportResult(result);
             await OfferTargetsViewOnceAsync(project, result);
 
@@ -385,6 +408,115 @@ internal sealed class ConanController
         finally
         {
             Interlocked.Exchange(ref _busy, 0);
+            if (Interlocked.Exchange(ref _recheckAfterInstall, 0) == 1)
+            {
+                _package.JoinableTaskFactory
+                    .RunAsync(() => OnInputsChangedAsync(project, new[] { "files changed during the install" }))
+                    .FileAndForget("VsConan/RecheckAfterInstall");
+            }
+        }
+    }
+
+    /// <summary>Watches the open project's Conan inputs for changes while the folder is open.</summary>
+    private void StartWatching(ConanProject project)
+    {
+        _watcher?.Dispose();
+        var cli = Cli(project);
+        _watcher = new ConanInputWatcher(
+            project.RootDirectory,
+            async cancellationToken =>
+            {
+                try
+                {
+                    return await cli.ConfigHomeAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
+                {
+                    return null; // Conan missing or broken: there are no profiles to watch.
+                }
+            },
+            reasons => _package.JoinableTaskFactory
+                .RunAsync(() => OnInputsChangedAsync(project, reasons))
+                .FileAndForget("VsConan/InputsChanged"));
+        _ = _watcher.StartAsync();
+    }
+
+    /// <summary>The result of a sync that found nothing to do; resumes CMake as DependencySync would.</summary>
+    private static SyncResult UpToDate(ConanProject project)
+    {
+        new CMakeGate(project.RootDirectory).Open();
+        return new SyncResult(SyncOutcome.UpToDate, Array.Empty<ProfileInstallResult>());
+    }
+
+    /// <summary>
+    /// Called (debounced, from <see cref="ConanInputWatcher"/>) when the conanfile, conan.lock,
+    /// conandata.yml, .conanrc or the Conan profiles change. If the install is now out of date, offers
+    /// to reinstall in an info bar, or reinstalls straight away if the project has autoInstallOnChange.
+    /// </summary>
+    private async Task OnInputsChangedAsync(ConanProject project, IReadOnlyList<string> reasons)
+    {
+        try
+        {
+            var settings = VsConanSettings.Load(project.RootDirectory);
+            if (settings.HostProfiles.Count == 0 || _folderSession.IsCancellationRequested)
+            {
+                return;
+            }
+
+            if (Volatile.Read(ref _busy) == 1)
+            {
+                Interlocked.Exchange(ref _recheckAfterInstall, 1);
+                return;
+            }
+
+            await TaskScheduler.Default;
+            if (await DependencySync.IsUpToDateAsync(project, settings, Cli(project), _folderSession.Token))
+            {
+                return;
+            }
+
+            var why = string.Join("; ", reasons);
+            _output.WriteLine($"Conan dependencies are out of date: {why}.");
+
+            // Checked before the info bar, so turning auto-install on takes effect even while an
+            // earlier info bar is still showing (clicking it later finds nothing left to install).
+            if (settings.AutoInstallOnChange)
+            {
+                await SyncAsync(project, settings, force: false);
+                return;
+            }
+
+            // One info bar at a time: it already offers to install whatever has changed since.
+            if (Interlocked.Exchange(ref _prompting, 1) == 1)
+            {
+                return;
+            }
+
+            void Reinstall() => _package.JoinableTaskFactory
+                .RunAsync(() => SyncAsync(project, VsConanSettings.Load(project.RootDirectory), force: false))
+                .FileAndForget("VsConan/ReinstallOnChange");
+
+            var shown = await OutOfDateInfoBar.ShowAsync(
+                _package,
+                $"Conan dependencies are out of date ({why}).",
+                onInstallNow: Reinstall,
+                onAlwaysInstall: () =>
+                {
+                    var latest = VsConanSettings.Load(project.RootDirectory);
+                    latest.AutoInstallOnChange = true;
+                    latest.Save(project.RootDirectory);
+                    Reinstall();
+                },
+                onClosed: () => Interlocked.Exchange(ref _prompting, 0));
+            if (!shown)
+            {
+                Interlocked.Exchange(ref _prompting, 0);
+                _output.WriteLine("Run Tools > Conan > Install Dependencies to update them.");
+            }
+        }
+        catch (Exception ex)
+        {
+            ReportException(ex);
         }
     }
 
@@ -415,7 +547,7 @@ internal sealed class ConanController
         ConanProject project, VsConanSettings current, CancellationToken cancellationToken, bool firstRun = false)
     {
         await TaskScheduler.Default;
-        var profiles = await _cli.ListProfilesAsync(cancellationToken);
+        var profiles = await Cli(project).ListProfilesAsync(cancellationToken);
 
         await _package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
         if (profiles.Count == 0)
@@ -432,6 +564,7 @@ internal sealed class ConanController
         }
 
         var settings = dialog.GetSettings();
+        settings.AutoInstallOnChange = current.AutoInstallOnChange;
         settings.Save(project.RootDirectory);
         return settings;
     }
@@ -492,7 +625,7 @@ internal sealed class ConanController
 
         if (ex is Win32Exception)
         {
-            _output.WriteLine($"Could not run '{_cli.Executable}': {ex.Message}. Make sure Conan 2 is installed and on PATH.");
+            _output.WriteLine($"Could not run '{ConanExecutable}': {ex.Message}. Make sure Conan 2 is installed and on PATH.");
         }
         else
         {

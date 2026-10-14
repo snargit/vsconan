@@ -27,7 +27,7 @@ public class DependencySyncIntegrationTests
         var gate = new CMakeGate(dir.Path);
         var gateStates = new List<bool>();
 
-        var result = await new DependencySync(new ConanCli()).RunAsync(
+        var result = await new DependencySync(new ConanCli("conan", dir.Path)).RunAsync(
             project, settings, force: false,
             line =>
             {
@@ -52,7 +52,7 @@ public class DependencySyncIntegrationTests
         Assert.Single(includes);
         Assert.Contains(Path.Combine("build", "default"), includes[0]);
         Assert.True(File.Exists(includes[0]));
-        Assert.True(DependencySync.IsUpToDate(project, settings));
+        Assert.True(await DependencySync.IsUpToDateAsync(project, settings, new ConanCli("conan", dir.Path), CancellationToken.None));
     }
 
     [Fact]
@@ -61,7 +61,7 @@ public class DependencySyncIntegrationTests
         using var dir = new TempDirectory();
         var project = CreateProject(dir);
         var settings = new VsConanSettings { HostProfiles = { "default" } };
-        var sync = new DependencySync(new ConanCli());
+        var sync = new DependencySync(new ConanCli("conan", dir.Path));
         await sync.RunAsync(project, settings, force: false, _ => { }, CancellationToken.None);
 
         // Simulate the folder closing, then reopening with nothing changed.
@@ -81,7 +81,7 @@ public class DependencySyncIntegrationTests
         const string handWritten = "{ \"version\": 4, \"configurePresets\": [] }";
         File.WriteAllText(UserPresetsFile.GetPath(dir.Path), handWritten);
 
-        var result = await new DependencySync(new ConanCli()).RunAsync(
+        var result = await new DependencySync(new ConanCli("conan", dir.Path)).RunAsync(
             project, new VsConanSettings { HostProfiles = { "default" } }, force: true, _ => { }, CancellationToken.None);
 
         Assert.Equal(SyncOutcome.UserPresetsNotOwned, result.Outcome);
