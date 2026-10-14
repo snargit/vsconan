@@ -19,3 +19,7 @@ packages/
 # Rider / VS Code
 .idea/
 .vscode/
+
+# Conan/CMake output in the samples
+samples/**/build/
+samples/**/CMakeUserPresets.json
