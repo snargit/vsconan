@@ -155,3 +155,26 @@ Core tests run with the .NET SDK alone:
 dotnet test tests/VsConan.Core.Tests                                   # all tests
 dotnet test tests/VsConan.Core.Tests --filter Category!=Integration    # skip tests that call conan
 ```
+
+## Continuous integration and releases
+
+GitHub Actions workflows live in `.github/workflows`:
+
+- **`ci.yml`** runs on every push to `main`, on pull requests, and on demand. It builds the
+  solution in Release with Visual Studio's MSBuild and runs all the tests. Conan is installed so
+  the integration tests run too. The resulting `.vsix` is uploaded as the `VsConan-vsix` build
+  artifact.
+- **`release.yml`** runs when a `v*` tag is pushed. It sets the tag's version in the VSIX
+  manifest and the assemblies, builds, and tests. It then creates a GitHub release with
+  `VsConan-<version>.vsix` attached and release notes generated from the commits.
+
+To make a release:
+
+```sh
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+Tags must be `vMAJOR.MINOR.PATCH`. VSIX versions are purely numeric, so pre-release suffixes like
+`-beta` are rejected. The versions in the source tree (`0.1.0`) are only used for local builds;
+releases take their version from the tag.

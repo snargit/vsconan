@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Full MSBuild from the runner's Visual Studio: 'dotnet build' can't package a VSIX.
+      - name: Find MSBuild
+        shell: pwsh
+        run: |
+          $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
+          if (-not $msbuild) { throw 'MSBuild not found.' }
+          Split-Path $msbuild | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          dotnet --list-sdks
+
+      # Conan for the integration tests (they run 'conan install' on a throwaway project).
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install Conan
+        run: |
+          pip install "conan>=2,<3"
+          conan profile detect
+
+      - name: Build
+        run: msbuild VsConan.sln -restore -p:Configuration=Release -v:minimal
+
+      - name: Test
+        run: dotnet test tests/VsConan.Core.Tests -c Release --no-build --logger "console;verbosity=normal"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: VsConan-vsix
+          path: src/VsConan/bin/Release/net48/VsConan.vsix
+          if-no-files-found: error

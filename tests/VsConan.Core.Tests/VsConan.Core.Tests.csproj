@@ -3,6 +3,8 @@
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <IsPackable>false</IsPackable>
+    <!-- Run on whatever newer .NET runtime is installed (e.g. CI runners without .NET 8). -->
+    <RollForward>Major</RollForward>
   </PropertyGroup>
 
   <ItemGroup>
