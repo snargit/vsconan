@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace>VsConan.Core</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Visual Studio ships Newtonsoft.Json; 13.0.1 is the oldest version in VS 2022 so it always binds. -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="VsConan.Core.Tests" />
+  </ItemGroup>
+
+</Project>
