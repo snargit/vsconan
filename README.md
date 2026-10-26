@@ -173,16 +173,37 @@ starts, and again when it finishes:
 
 - `state` is `running`, then `succeeded` or `failed`. When it's `failed`, `error` holds a message
   meant for the caller, such as `Unknown Conan profile(s): clang. Available profiles: default, debug.`
-- `id` echoes `/id:<token>`. Only the most recent command's result is kept, so poll until both
-  `id` matches your token and `state` isn't `running`.
+- `id` echoes `/id:<token>`. `command-result.json` holds only the most recent command's result,
+  so poll until both `id` matches your token and `state` isn't `running`. A request whose token
+  is letters, digits, `-` and `_` (up to 64 characters) also gets its own file,
+  `<folder>/.vs/VsConan/command-results/<token>.json`, which other callers' commands don't
+  overwrite. Poll that one if several callers may run commands at the same time. Files older
+  than a day are deleted.
 - `result` depends on the command:
   - `Conan.ShowStatus` and `Conan.SelectProfiles` give a **status**: `folder`, `conanfile`,
-    `usesCmakeLayout`, `hostProfiles`, `buildProfile`, `upToDate`, `cmakePaused`,
-    `configurePresets` and `availableProfiles`.
+    `usesCmakeLayout`, `hostProfiles`, `buildProfile`, `upToDate`, `installing` (an install is
+    running, so CMake is paused until it finishes), `cmakePaused`, `configurePresets` and
+    `availableProfiles`.
   - `Conan.InstallDependencies` gives an **install report**: `outcome` (`installed`, `upToDate`,
     `partiallyFailed` or `userPresetsNotOwned`), `profiles` and `configurePresets`.
 
-Each command also writes a one-line summary to the **Conan** output pane.
+Each command also writes a one-line summary to the **Conan** output pane. Automated commands
+don't bring the pane forward. `Conan.InstallDependencies` waits for an install that's already
+running (for example, one started because the conanfile changed) and then runs.
+
+### Unattended Visual Studio
+
+When nobody is at Visual Studio, for example a hidden instance an agent drives, set the
+environment variable `VSCONAN_UNATTENDED=1` for it. VsConan then shows no windows or info
+bars:
+
+- A folder without selected profiles keeps CMake paused, instead of showing the first-run
+  window, until `Conan.SelectProfiles` and `Conan.InstallDependencies` run. To skip that,
+  copy the folder's `.vs/VsConan/settings.json` from an attended checkout: the folder then
+  installs when it opens.
+- When the Conan inputs change, the dependencies are reinstalled straight away, as with
+  **Always install automatically**.
+- The **Switch to CMake Targets View** offer isn't made.
 
 ### Example
 

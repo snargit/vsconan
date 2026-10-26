@@ -102,6 +102,16 @@ internal sealed class ConanController
             return;
         }
 
+        // Nobody to ask: CMake stays paused (configuring without the Conan toolchain would fail) until
+        // automation selects profiles and installs. The window is still offered when someone opens it.
+        if (Unattended.IsSet())
+        {
+            gate.Close();
+            _output.WriteLine("No Conan profiles are selected for this folder. Visual Studio is unattended, so CMake stays paused "
+                + "until Conan.SelectProfiles <profiles> and Conan.InstallDependencies run.");
+            return;
+        }
+
         // Configuring now would run without the Conan toolchain, so pause while the user decides.
         gate.Close();
 
@@ -275,8 +285,8 @@ internal sealed class ConanController
         _output.WriteLine($"{command}{id}: {result.State}{(result.Error is null ? string.Empty : $": {result.Error}")}");
         if (showOutput && result.Result is not null)
         {
+            // Not activated: an automated call shouldn't change what the Output window shows.
             _output.WriteLine(JsonConvert.SerializeObject(result.Result, Formatting.Indented));
-            await _output.ActivateAsync();
         }
     }
 
@@ -308,7 +318,7 @@ internal sealed class ConanController
         state.FirstRunPromptShown = true;
         state.Save(project.RootDirectory);
 
-        return await ProjectStatus.CreateAsync(project, cli, available, _folderSession.Token);
+        return await ProjectStatus.CreateAsync(project, cli, available, _folderSession.Token, Installing);
     }
 
     private async Task<object> AutomateInstallAsync(ConanProject project, AutomationArguments arguments)
@@ -320,8 +330,25 @@ internal sealed class ConanController
                 "No Conan profiles are selected for this folder. Run Conan.SelectProfiles <profiles> first.");
         }
 
-        var result = await SyncCoreAsync(project, settings, arguments.Force);
-        return InstallReport.Create(project, result);
+        // One install at a time: an automated request waits for the running one (e.g. started by an
+        // input change) and then runs, which usually finds the dependencies up to date.
+        while (true)
+        {
+            while (Installing)
+            {
+                await Task.Delay(500, _folderSession.Token);
+            }
+
+            try
+            {
+                var result = await SyncCoreAsync(project, settings, arguments.Force, activateOutput: false);
+                return InstallReport.Create(project, result);
+            }
+            catch (InvalidOperationException ex) when (ex.Message == AlreadyRunning)
+            {
+                // Another install started in between: wait for that one too.
+            }
+        }
     }
 
     private async Task<object> AutomateShowStatusAsync(ConanProject project, AutomationArguments arguments)
@@ -329,8 +356,10 @@ internal sealed class ConanController
         await TaskScheduler.Default;
         var cli = Cli(project);
         var available = await cli.ListProfilesAsync(_folderSession.Token);
-        return await ProjectStatus.CreateAsync(project, cli, available, _folderSession.Token);
+        return await ProjectStatus.CreateAsync(project, cli, available, _folderSession.Token, Installing);
     }
+
+    private bool Installing => Volatile.Read(ref _busy) == 1;
 
     private string DescribeForCaller(Exception ex) => ex switch
     {
@@ -359,7 +388,7 @@ internal sealed class ConanController
         }
     }
 
-    private async Task<SyncResult> SyncCoreAsync(ConanProject project, VsConanSettings settings, bool force)
+    private async Task<SyncResult> SyncCoreAsync(ConanProject project, VsConanSettings settings, bool force, bool activateOutput = true)
     {
         if (Interlocked.Exchange(ref _busy, 1) == 1)
         {
@@ -380,7 +409,11 @@ internal sealed class ConanController
                         + "Without it, CMake presets for different profiles will have clashing names.");
                 }
 
-                await _output.ActivateAsync();
+                if (activateOutput && !Unattended.IsSet())
+                {
+                    await _output.ActivateAsync();
+                }
+
                 await SetStatusTextAsync("Conan: installing dependencies (CMake paused)...");
             }
 
@@ -480,7 +513,8 @@ internal sealed class ConanController
 
             // Checked before the info bar, so turning auto-install on takes effect even while an
             // earlier info bar is still showing (clicking it later finds nothing left to install).
-            if (settings.AutoInstallOnChange)
+            // Unattended, nobody would see the info bar.
+            if (settings.AutoInstallOnChange || Unattended.IsSet())
             {
                 await SyncAsync(project, settings, force: false);
                 return;
@@ -532,7 +566,7 @@ internal sealed class ConanController
         }
 
         var state = VsConanState.Load(project.RootDirectory);
-        if (state.TargetsViewHintShown)
+        if (state.TargetsViewHintShown || Unattended.IsSet())
         {
             return;
         }

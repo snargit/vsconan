@@ -473,4 +473,41 @@ public class StatusAndResultTests
         Assert.NotNull(json["startedAt"]);
         Assert.Null(json["result"]);
     }
+
+    [Fact]
+    public void CommandResult_KeepsEachRequestsResultInItsOwnFile()
+    {
+        using var dir = new TempDirectory();
+        new CommandResult { Id = "first", Command = "Conan.InstallDependencies", StartedAt = DateTimeOffset.Now }.Save(dir.Path);
+        new CommandResult { Id = "second", Command = "Conan.ShowStatus", State = CommandResult.Succeeded, StartedAt = DateTimeOffset.Now }.Save(dir.Path);
+
+        var first = Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText(CommandResult.GetPath(dir.Path, "first")!));
+        var latest = Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText(CommandResult.GetPath(dir.Path)));
+
+        Assert.Equal("running", (string?)first["state"]);
+        Assert.Equal("Conan.InstallDependencies", (string?)first["command"]);
+        Assert.Equal("second", (string?)latest["id"]);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("../escape")]
+    [InlineData("a b")]
+    public void CommandResult_HasNoOwnFileForUnsafeIds(string? id)
+    {
+        Assert.Null(CommandResult.GetPath(@"C:\project", id));
+    }
+
+    [Theory]
+    [InlineData("1", true)]
+    [InlineData("true", true)]
+    [InlineData(" TRUE ", true)]
+    [InlineData("0", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void Unattended_ReadsTheEnvironmentVariable(string? value, bool expected)
+    {
+        Assert.Equal(expected, Unattended.IsSet(name => name == Unattended.VariableName ? value : null));
+    }
 }

@@ -43,11 +43,64 @@ public sealed class CommandResult
     [JsonProperty("result", NullValueHandling = NullValueHandling.Ignore)]
     public object? Result { get; set; }
 
+    /// <summary>Results older than this are deleted when a new one is written.</summary>
+    private static readonly TimeSpan KeepResultsFor = TimeSpan.FromDays(1);
+
     public static string GetPath(string projectDirectory) =>
         Path.Combine(projectDirectory, ".vs", "VsConan", "command-result.json");
 
-    public void Save(string projectDirectory) =>
-        AtomicFile.WriteAllTextIfChanged(GetPath(projectDirectory), JsonConvert.SerializeObject(this, Formatting.Indented));
+    /// <summary>
+    /// Where the result of the request with <c>/id:</c><paramref name="id"/> is kept, so callers running
+    /// commands at the same time each find theirs; null for ids that aren't safe as file names
+    /// (letters, digits, '-' and '_', up to 64 characters).
+    /// </summary>
+    public static string? GetPath(string projectDirectory, string? id) =>
+        IsFileSafe(id) ? Path.Combine(projectDirectory, ".vs", "VsConan", "command-results", id + ".json") : null;
+
+    private static bool IsFileSafe(string? id) =>
+        !string.IsNullOrEmpty(id) && id!.Length <= 64 && id.All(c => c is (>= 'a' and <= 'z') or (>= 'A' and <= 'Z') or (>= '0' and <= '9') or '-' or '_');
+
+    /// <summary>Writes command-result.json (the most recent command) and, for a request with an id, its own file.</summary>
+    public void Save(string projectDirectory)
+    {
+        var json = JsonConvert.SerializeObject(this, Formatting.Indented);
+        AtomicFile.WriteAllTextIfChanged(GetPath(projectDirectory), json);
+        if (GetPath(projectDirectory, Id) is string own)
+        {
+            if (State == Running)
+            {
+                DeleteOldResults(Path.GetDirectoryName(own)!);
+            }
+
+            AtomicFile.WriteAllTextIfChanged(own, json);
+        }
+    }
+
+    private static void DeleteOldResults(string folder)
+    {
+        if (!Directory.Exists(folder))
+        {
+            return;
+        }
+
+        foreach (var file in Directory.EnumerateFiles(folder, "*.json"))
+        {
+            try
+            {
+                if (DateTime.UtcNow - File.GetLastWriteTimeUtc(file) > KeepResultsFor)
+                {
+                    File.Delete(file);
+                }
+            }
+            catch (IOException)
+            {
+                // In use or already gone: it goes next time.
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
 }
 
 /// <summary>What a caller needs to decide what to do next with the open folder.</summary>
@@ -73,6 +126,10 @@ public sealed class ProjectStatus
     [JsonProperty("upToDate")]
     public bool UpToDate { get; set; }
 
+    /// <summary>True while a Conan install is running for this folder (CMake is paused until it finishes).</summary>
+    [JsonProperty("installing")]
+    public bool Installing { get; set; }
+
     /// <summary>True while VS's CMake integration is turned off for this folder (by VsConan or the user).</summary>
     [JsonProperty("cmakePaused")]
     public bool CMakePaused { get; set; }
@@ -87,7 +144,8 @@ public sealed class ProjectStatus
 
     /// <param name="cli">Conan, run in the project folder; used to check whether the install is up to date.</param>
     public static async Task<ProjectStatus> CreateAsync(
-        ConanProject project, ConanCli cli, IReadOnlyList<string>? availableProfiles, CancellationToken cancellationToken)
+        ConanProject project, ConanCli cli, IReadOnlyList<string>? availableProfiles, CancellationToken cancellationToken,
+        bool installing = false)
     {
         var directory = project.RootDirectory;
         var settings = VsConanSettings.Load(directory);
@@ -101,6 +159,7 @@ public sealed class ProjectStatus
             HostProfiles = settings.HostProfiles.ToList(),
             BuildProfile = settings.BuildProfile,
             UpToDate = upToDate,
+            Installing = installing,
             CMakePaused = !new CMakeGate(directory).IsCMakeEnabled,
             ConfigurePresets = UserPresetsFile.CurrentConfigurePresetNames(directory).ToList(),
             AvailableProfiles = availableProfiles?.ToList(),
