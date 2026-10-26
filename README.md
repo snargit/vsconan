@@ -201,6 +201,12 @@ bars:
   window, until `Conan.SelectProfiles` and `Conan.InstallDependencies` run. To skip that,
   copy the folder's `.vs/VsConan/settings.json` from an attended checkout: the folder then
   installs when it opens.
+- A fresh copy (a worktree, or a copy made for an agent) has no build folders yet, and Visual
+  Studio's CMake would configure it before VsConan loads, without the Conan toolchain. Start it
+  paused, the way VsConan leaves folders it closes: before opening it, write
+  `.vs/CMakeWorkspaceSettings.json` with `{ "enableCMake": false }` and
+  `.vs/VsConan/state.json` with `{ "cmakeGateClosed": true }`. VsConan installs, then turns
+  CMake back on, and Visual Studio configures from the Conan presets.
 - When the Conan inputs change, the dependencies are reinstalled straight away, as with
   **Always install automatically**.
 - The **Switch to CMake Targets View** offer isn't made.
