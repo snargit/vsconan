@@ -70,17 +70,20 @@ public sealed class ConanCli
 
     /// <summary>
     /// Runs the install. Conan's log goes to <paramref name="onOutput"/>; the JSON graph is parsed.
-    /// A failed install's result carries the end of the log, where Conan reports the error.
+    /// A failed install's result carries the end of the log, where Conan reports the error; a
+    /// successful one the find_package() names and targets CMakeDeps listed.
     /// </summary>
     public async Task<ProfileInstallResult> InstallAsync(
         ConanInstallRequest request, Action<string> onOutput, CancellationToken cancellationToken)
     {
         var tail = new OutputTail();
+        var usage = new CMakeUsageCollector();
         var result = await ProcessRunner.RunAsync(
             Executable, request.BuildArguments(), request.ProjectDirectory,
             line =>
             {
                 tail.Add(line);
+                usage.Add(line);
                 onOutput(line);
             },
             cancellationToken,
@@ -99,7 +102,7 @@ public sealed class ConanCli
             presetsFile = Path.Combine(generatorsFolder, "CMakePresets.json");
         }
 
-        return new ProfileInstallResult(request.HostProfile, result.ExitCode, presetsFile);
+        return new ProfileInstallResult(request.HostProfile, result.ExitCode, presetsFile, cmakeUsage: usage.Result);
     }
 
     internal static IReadOnlyList<string> ParseProfileList(string json)

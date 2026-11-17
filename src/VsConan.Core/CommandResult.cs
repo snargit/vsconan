@@ -236,6 +236,7 @@ public sealed class InstallReport
                 Succeeded = p.Succeeded,
                 ExitCode = p.ExitCode,
                 ErrorOutput = p.Succeeded ? null : p.ErrorOutput,
+                CMakeUsage = p.Succeeded ? p.CMakeUsage : null,
             })
             .ToList(),
         ConfigurePresets = UserPresetsFile.CurrentConfigurePresetNames(project.RootDirectory).ToList(),
@@ -288,6 +289,10 @@ public sealed class InstallReport
         /// <summary>For a failed profile, the end of Conan's output, where it reports the error.</summary>
         [JsonProperty("errorOutput", NullValueHandling = NullValueHandling.Ignore)]
         public string? ErrorOutput { get; set; }
+
+        /// <summary>For a profile that installed, what CMakeLists.txt needs to use its direct dependencies.</summary>
+        [JsonProperty("cmakeUsage", NullValueHandling = NullValueHandling.Ignore)]
+        public CMakeUsage? CMakeUsage { get; set; }
     }
 }
 

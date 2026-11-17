@@ -91,6 +91,50 @@ public class DependencySyncIntegrationTests
     }
 
     [Fact]
+    public async Task RunAsync_ReportsTheFindPackageNamesAndTargetsOfDirectDependencies()
+    {
+        // A header-only package (nothing to compile), whose CMake names differ from its package name.
+        using var dir = new TempDirectory();
+        dir.Write(Path.Combine("dep", "conanfile.py"), """
+            from conan import ConanFile
+
+            class Dep(ConanFile):
+                name = "vsconan-testdep"
+                version = "0.1"
+                package_type = "header-library"
+
+                def package_info(self):
+                    self.cpp_info.bindirs = []
+                    self.cpp_info.libdirs = []
+                    self.cpp_info.set_property("cmake_file_name", "VsConanTestDep")
+                    self.cpp_info.set_property("cmake_target_name", "VsConanTestDep::headers")
+            """);
+        var app = Path.Combine(dir.Path, "app");
+        Directory.CreateDirectory(app);
+        File.WriteAllText(Path.Combine(app, "conanfile.txt"),
+            "[requires]\nvsconan-testdep/0.1\n[generators]\nCMakeToolchain\nCMakeDeps\n[layout]\ncmake_layout\n");
+        File.WriteAllText(Path.Combine(app, "CMakeLists.txt"), "cmake_minimum_required(VERSION 3.23)\nproject(app CXX)\n");
+
+        var export = await ProcessRunner.RunAsync("conan", new[] { "export", Path.Combine(dir.Path, "dep") }, dir.Path, null, CancellationToken.None);
+        Assert.Equal(0, export.ExitCode);
+        try
+        {
+            var project = ConanProject.Find(app)!;
+            var result = await new DependencySync(new ConanCli("conan", app)).RunAsync(
+                project, new VsConanSettings { HostProfiles = { "default" } }, force: false, _ => { }, CancellationToken.None);
+
+            Assert.Equal(SyncOutcome.Installed, result.Outcome);
+            var usage = Assert.Single(InstallReport.Create(project, result).Profiles).CMakeUsage;
+            Assert.Equal(new[] { "VsConanTestDep" }, usage!.FindPackages);
+            Assert.Equal(new[] { "VsConanTestDep::headers" }, usage.Targets);
+        }
+        finally
+        {
+            await ProcessRunner.RunAsync("conan", new[] { "remove", "vsconan-testdep/*", "-c" }, dir.Path, null, CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task RunAsync_RefusesToOverwriteHandWrittenUserPresets()
     {
         using var dir = new TempDirectory();

@@ -63,8 +63,10 @@ A result has `state` (`succeeded` or `failed`), `error` when it failed, and `res
   `availableProfiles`, `upToDate`, `installing`, `cmakePaused`, `usesCmakeLayout` and
   `configurePresets`.
 - **Install report** (`InstallDependencies`): `outcome` is `installed`, `upToDate`,
-  `partiallyFailed` or `userPresetsNotOwned`. It also has `profiles` (each with `succeeded`, and
-  `errorOutput` with the end of Conan's output when it failed) and `configurePresets`.
+  `partiallyFailed` or `userPresetsNotOwned`. It also has `profiles` and `configurePresets`.
+  Each profile has `succeeded`, plus `errorOutput` (the end of Conan's output) when it failed,
+  or `cmakeUsage` (the `find_package` names and targets of its direct dependencies) when it
+  installed.
 - **`hints`**, in either: what to do next. Follow them. When a hint says to ask the user, ask
   before doing it, because it's about the user's own files or settings.
 
@@ -87,10 +89,11 @@ A result has `state` (`succeeded` or `failed`), `error` when it failed, and `res
    user chose **Always install automatically**, VsConan may already be installing because the
    conanfile changed. `InstallDependencies` waits for that install and then reports it.
 4. **Use the dependency in `CMakeLists.txt`.** Call `find_package(<name> REQUIRED CONFIG)` and
-   `target_link_libraries(<target> PRIVATE <name>::<component>)`. Conan prints the exact names
-   after the line *CMakeDeps necessary find_package() and targets for your CMakeLists.txt* in the
-   Conan output pane. They're also in the profile's generators folder, at
-   `build/<profile>/<build type>/generators`:
+   `target_link_libraries(<your target> PRIVATE <target>)`. Take the names from each profile's
+   `cmakeUsage` in the install report (`findPackages` and `targets`), not from the package
+   name, because recipes often define different ones (for example, `ZLIB` and `ZLIB::ZLIB` for
+   the `zlib` package). If the report has no `cmakeUsage`, because the install was already up to date,
+   look in the profile's generators folder, `build/<profile>/<build type>/generators`:
    - every `<name>-config.cmake` or `<Name>Config.cmake` file there is a `find_package` name;
    - `conandeps_legacy.cmake` lists the targets of all direct dependencies.
 5. **Build through Visual Studio.** It configures again by itself after the install.

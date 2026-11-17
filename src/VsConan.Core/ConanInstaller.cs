@@ -7,12 +7,14 @@ namespace VsConan.Core;
 
 public sealed class ProfileInstallResult
 {
-    public ProfileInstallResult(string profile, int exitCode, string? presetsFile, string? errorOutput = null)
+    public ProfileInstallResult(
+        string profile, int exitCode, string? presetsFile, string? errorOutput = null, CMakeUsage? cmakeUsage = null)
     {
         Profile = profile;
         ExitCode = exitCode;
         PresetsFile = presetsFile;
         ErrorOutput = errorOutput;
+        CMakeUsage = cmakeUsage;
     }
 
     public string Profile { get; }
@@ -24,6 +26,9 @@ public sealed class ProfileInstallResult
 
     /// <summary>The end of Conan's output, where it reports the error, if the install failed.</summary>
     public string? ErrorOutput { get; }
+
+    /// <summary>The find_package() names and targets of the direct dependencies, if the install succeeded and CMakeDeps listed them.</summary>
+    public CMakeUsage? CMakeUsage { get; }
 
     public bool Succeeded => ExitCode == 0;
 }

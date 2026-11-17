@@ -538,6 +538,55 @@ public class OutputTailTests
     }
 }
 
+public class CMakeUsageCollectorTests
+{
+    private static CMakeUsage? Collect(params string[] lines)
+    {
+        var collector = new CMakeUsageCollector();
+        foreach (var line in lines)
+        {
+            collector.Add(line);
+        }
+
+        return collector.Result;
+    }
+
+    [Fact]
+    public void ReadsTheCMakeDepsSummary()
+    {
+        var usage = Collect(
+            "Generator 'CMakeDeps' calling 'generate()'",
+            "CMakeDeps necessary find_package() and targets for your CMakeLists.txt",
+            "    find_package(nlohmann_json)",
+            "    find_package(fmt)",
+            "    target_link_libraries(... nlohmann_json::nlohmann_json fmt::fmt)",
+            "Generating aggregated env files",
+            "    find_package(not_in_the_summary)");
+
+        Assert.Equal(new[] { "nlohmann_json", "fmt" }, usage!.FindPackages);
+        Assert.Equal(new[] { "nlohmann_json::nlohmann_json", "fmt::fmt" }, usage.Targets);
+    }
+
+    [Fact]
+    public void ToleratesAPrefixColoursAndToolRequireNotes()
+    {
+        var usage = Collect(
+            "conanfile.py (app/1.0): \u001b[36mCMakeDeps necessary find_package() and targets for your CMakeLists.txt",
+            "    find_package(Protobuf) # Optional. This is a tool-require, can't link its targets",
+            "    find_package(ZLIB)\u001b[0m",
+            "    target_link_libraries(... ZLIB::ZLIB)");
+
+        Assert.Equal(new[] { "Protobuf", "ZLIB" }, usage!.FindPackages);
+        Assert.Equal(new[] { "ZLIB::ZLIB" }, usage.Targets);
+    }
+
+    [Fact]
+    public void IsNullWithoutASummary()
+    {
+        Assert.Null(Collect("Install finished successfully", "    find_package(fmt)"));
+    }
+}
+
 public class HintTests
 {
     private const string Layout = "[layout]\ncmake_layout\n";
@@ -616,6 +665,7 @@ public class HintTests
         var json = Newtonsoft.Json.Linq.JObject.FromObject(report);
 
         Assert.Null(json["profiles"]![0]!["errorOutput"]);
+        Assert.Null(json["profiles"]![0]!["cmakeUsage"]);
         Assert.Equal("ERROR: Invalid setting", (string?)json["profiles"]![1]!["errorOutput"]);
         var hint = Assert.Single(report.Hints!);
         Assert.Contains("Conan failed for profile 'clang'", hint);
