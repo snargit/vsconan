@@ -248,6 +248,33 @@ Invoke-Conan 'Conan.InstallDependencies' ''
 target a particular instance, look up its `!VisualStudio.DTE.<version>:<process id>` entry in the
 Running Object Table. MCP servers that work with several instances need to do this.
 
+### Agent skill
+
+[`skills/vsconan`](skills/vsconan/SKILL.md) is an [Agent Skill](https://agentskills.io) that
+teaches a coding agent to work with VsConan. It covers adding a dependency end to end, the rules
+a conanfile must follow, profiles, which files not to edit, reading results and hints, and
+unattended Visual Studio. Agents that support skills load it when a task touches a VsConan
+folder.
+
+If the agent has no tools that run VsConan's commands, it uses the skill's
+[`scripts/Invoke-VsConan.ps1`](skills/vsconan/scripts/Invoke-VsConan.ps1). The script finds the
+Visual Studio that has the folder open, runs the command, waits, and prints the result JSON. It
+runs in Windows PowerShell 5.1 and PowerShell 7.
+
+To install it:
+
+- **Claude Code**, as a plugin from this repository:
+
+  ```
+  claude plugin marketplace add snargit/vsconan
+  claude plugin install vsconan@vsconan
+  ```
+
+  Or, in a session, `/plugin install vsconan --marketplace snargit/vsconan`.
+- **Other agents**: copy `skills/vsconan` into the folder where the agent looks for skills. That
+  is `~/.agents/skills` or a project's `.agents/skills` for Codex, and `~/.claude/skills` or
+  `.claude/skills` for Claude Code without the plugin.
+
 ## Repository layout
 
 | Path | Description |
@@ -255,6 +282,8 @@ Running Object Table. MCP servers that work with several instances need to do th
 | `src/VsConan.Core` | `netstandard2.0` library with no VS dependencies: Conan CLI wrapper, install orchestration, settings. |
 | `src/VsConan` | The VSIX (VSSDK, in-process, .NET Framework 4.8): package, menu commands, output pane, profile dialog. |
 | `tests/VsConan.Core.Tests` | xUnit tests for the core library. `Category=Integration` tests need `conan` on PATH. |
+| `skills/vsconan` | The agent skill (see [Agent skill](#agent-skill)). |
+| `.claude-plugin` | Makes the repository a Claude Code plugin marketplace for the skill. |
 
 ## Building
 

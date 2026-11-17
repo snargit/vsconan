@@ -1,0 +1,9 @@
+{
+  "name": "vsconan",
+  "description": "Teaches agents to install a Visual Studio CMake folder's Conan dependencies through the VsConan extension, instead of running conan install in a shell.",
+  "author": { "name": "VsConan", "url": "https://github.com/snargit/vsconan" },
+  "homepage": "https://github.com/snargit/vsconan",
+  "repository": "https://github.com/snargit/vsconan",
+  "license": "MIT",
+  "keywords": ["conan", "cmake", "visual-studio", "c++"]
+}

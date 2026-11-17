@@ -1,0 +1,12 @@
+{
+  "name": "vsconan",
+  "description": "The VsConan agent skill: Conan dependencies for CMake folders in Visual Studio.",
+  "owner": { "name": "VsConan", "url": "https://github.com/snargit/vsconan" },
+  "plugins": [
+    {
+      "name": "vsconan",
+      "source": "./",
+      "description": "Teaches agents to install a Visual Studio CMake folder's Conan dependencies through the VsConan extension, instead of running conan install in a shell."
+    }
+  ]
+}
