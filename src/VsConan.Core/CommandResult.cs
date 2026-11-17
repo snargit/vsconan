@@ -142,6 +142,10 @@ public sealed class ProjectStatus
     [JsonProperty("availableProfiles", NullValueHandling = NullValueHandling.Ignore)]
     public List<string>? AvailableProfiles { get; set; }
 
+    /// <summary>Per selected host profile, what CMakeLists.txt needs to use its direct dependencies (from its last successful install).</summary>
+    [JsonProperty("cmakeUsage", NullValueHandling = NullValueHandling.Ignore)]
+    public Dictionary<string, CMakeUsage>? CMakeUsage { get; set; }
+
     /// <summary>What the caller should do next, in words meant for it; omitted when there's nothing to do.</summary>
     [JsonProperty("hints", NullValueHandling = NullValueHandling.Ignore)]
     public List<string>? Hints { get; set; }
@@ -168,7 +172,9 @@ public sealed class ProjectStatus
             ConfigurePresets = UserPresetsFile.CurrentConfigurePresetNames(directory).ToList(),
             AvailableProfiles = availableProfiles?.ToList(),
         };
-        status.Hints = status.CreateHints(pausedByVsConan: VsConanState.Load(directory).CMakeGateClosed);
+        var state = VsConanState.Load(directory);
+        status.CMakeUsage = state.CMakeUsageOf(settings.HostProfiles);
+        status.Hints = status.CreateHints(pausedByVsConan: state.CMakeGateClosed);
         return status;
     }
 
@@ -216,6 +222,10 @@ public sealed class InstallReport
     [JsonProperty("configurePresets")]
     public List<string> ConfigurePresets { get; set; } = new();
 
+    /// <summary>Per selected host profile, what CMakeLists.txt needs to use its direct dependencies (from its last successful install).</summary>
+    [JsonProperty("cmakeUsage", NullValueHandling = NullValueHandling.Ignore)]
+    public Dictionary<string, CMakeUsage>? CMakeUsage { get; set; }
+
     /// <summary>What the caller should do next, in words meant for it; omitted when there's nothing to do.</summary>
     [JsonProperty("hints", NullValueHandling = NullValueHandling.Ignore)]
     public List<string>? Hints { get; set; }
@@ -236,10 +246,11 @@ public sealed class InstallReport
                 Succeeded = p.Succeeded,
                 ExitCode = p.ExitCode,
                 ErrorOutput = p.Succeeded ? null : p.ErrorOutput,
-                CMakeUsage = p.Succeeded ? p.CMakeUsage : null,
             })
             .ToList(),
         ConfigurePresets = UserPresetsFile.CurrentConfigurePresetNames(project.RootDirectory).ToList(),
+        CMakeUsage = VsConanState.Load(project.RootDirectory)
+            .CMakeUsageOf(VsConanSettings.Load(project.RootDirectory).HostProfiles),
         Hints = CreateHints(project, result),
     };
 
@@ -289,10 +300,6 @@ public sealed class InstallReport
         /// <summary>For a failed profile, the end of Conan's output, where it reports the error.</summary>
         [JsonProperty("errorOutput", NullValueHandling = NullValueHandling.Ignore)]
         public string? ErrorOutput { get; set; }
-
-        /// <summary>For a profile that installed, what CMakeLists.txt needs to use its direct dependencies.</summary>
-        [JsonProperty("cmakeUsage", NullValueHandling = NullValueHandling.Ignore)]
-        public CMakeUsage? CMakeUsage { get; set; }
     }
 }
 

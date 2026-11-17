@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.IO;
 using Newtonsoft.Json;
 
@@ -27,6 +28,28 @@ public sealed class VsConanState
     /// <summary><see cref="InstallFingerprint"/> of the last fully successful install.</summary>
     [JsonProperty("installFingerprint")]
     public string? InstallFingerprint { get; set; }
+
+    /// <summary>
+    /// Per host profile, the find_package() names and targets from its last successful install, so
+    /// they can be reported when nothing needs installing.
+    /// </summary>
+    [JsonProperty("cmakeUsage", NullValueHandling = NullValueHandling.Ignore)]
+    public Dictionary<string, CMakeUsage>? CMakeUsage { get; set; }
+
+    /// <summary>The remembered <see cref="CMakeUsage"/> of these profiles, in their order; null if there is none.</summary>
+    public Dictionary<string, CMakeUsage>? CMakeUsageOf(IEnumerable<string> profiles)
+    {
+        var selected = new Dictionary<string, CMakeUsage>();
+        foreach (var profile in profiles)
+        {
+            if (CMakeUsage is not null && CMakeUsage.TryGetValue(profile, out var usage) && !selected.ContainsKey(profile))
+            {
+                selected.Add(profile, usage);
+            }
+        }
+
+        return selected.Count > 0 ? selected : null;
+    }
 
     public static string GetPath(string projectDirectory) =>
         Path.Combine(projectDirectory, ".vs", "VsConan", "state.json");

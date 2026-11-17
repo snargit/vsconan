@@ -92,6 +92,32 @@ public sealed class DependencySync
         return state.InstallFingerprint == await CurrentFingerprintAsync(project, settings, cli, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// The CMake usage to remember after an install, for the selected profiles: a profile that installed
+    /// gets this install's (none if CMakeDeps listed nothing, e.g. it has no dependencies left), and one
+    /// that failed keeps its last good install's, as it keeps that install's presets.
+    /// </summary>
+    internal static Dictionary<string, CMakeUsage>? RememberCMakeUsage(
+        IReadOnlyDictionary<string, CMakeUsage>? remembered,
+        IEnumerable<string> hostProfiles,
+        IReadOnlyList<ProfileInstallResult> results)
+    {
+        var usage = new Dictionary<string, CMakeUsage>();
+        foreach (var profile in hostProfiles)
+        {
+            var result = results.FirstOrDefault(r => r.Profile == profile);
+            var kept = result is { Succeeded: true }
+                ? result.CMakeUsage
+                : remembered is not null && remembered.TryGetValue(profile, out var last) ? last : null;
+            if (kept is not null)
+            {
+                usage[profile] = kept;
+            }
+        }
+
+        return usage.Count > 0 ? usage : null;
+    }
+
     /// <param name="force">Install even if <see cref="IsUpToDateAsync"/>.</param>
     public async Task<SyncResult> RunAsync(
         ConanProject project,
@@ -153,6 +179,7 @@ public sealed class DependencySync
 
             var state = VsConanState.Load(directory);
             state.InstallFingerprint = allSucceeded ? fingerprint : null;
+            state.CMakeUsage = RememberCMakeUsage(state.CMakeUsage, settings.HostProfiles, results);
             state.Save(directory);
 
             return new SyncResult(allSucceeded ? SyncOutcome.Installed : SyncOutcome.PartiallyFailed, results);

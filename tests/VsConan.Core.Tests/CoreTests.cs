@@ -585,6 +585,50 @@ public class CMakeUsageCollectorTests
     {
         Assert.Null(Collect("Install finished successfully", "    find_package(fmt)"));
     }
+
+    private static CMakeUsage Usage(string name) =>
+        new() { FindPackages = { name }, Targets = { name + "::" + name } };
+
+    [Fact]
+    public void Remember_UpdatesInstalledProfilesAndKeepsFailedOnes()
+    {
+        var remembered = new System.Collections.Generic.Dictionary<string, CMakeUsage>
+        {
+            ["failed"] = Usage("old"),
+            ["emptied"] = Usage("old"),
+            ["installed"] = Usage("old"),
+            ["unselected"] = Usage("old"),
+        };
+        var results = new[]
+        {
+            new ProfileInstallResult("failed", 1, null, "ERROR: boom"),
+            new ProfileInstallResult("emptied", 0, null), // installed, but CMakeDeps listed nothing
+            new ProfileInstallResult("installed", 0, null, cmakeUsage: Usage("new")),
+        };
+
+        var usage = DependencySync.RememberCMakeUsage(remembered, new[] { "installed", "failed", "emptied", "notYet" }, results)!;
+
+        Assert.Equal(new[] { "installed", "failed" }, usage.Keys);
+        Assert.Equal("new", usage["installed"].FindPackages[0]);
+        Assert.Equal("old", usage["failed"].FindPackages[0]);
+        Assert.Null(DependencySync.RememberCMakeUsage(null, new[] { "a" }, Array.Empty<ProfileInstallResult>()));
+    }
+
+    [Fact]
+    public void State_RemembersUsageAndReportsTheSelectedProfilesInOrder()
+    {
+        using var dir = new TempDirectory();
+        new VsConanState
+        {
+            CMakeUsage = new() { ["default"] = Usage("fmt"), ["debug"] = Usage("zlib"), ["other"] = Usage("x") },
+        }.Save(dir.Path);
+
+        var usage = VsConanState.Load(dir.Path).CMakeUsageOf(new[] { "debug", "default", "missing" })!;
+
+        Assert.Equal(new[] { "debug", "default" }, usage.Keys);
+        Assert.Equal(new[] { "zlib::zlib" }, usage["debug"].Targets);
+        Assert.Null(new VsConanState().CMakeUsageOf(new[] { "default" }));
+    }
 }
 
 public class HintTests

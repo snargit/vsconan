@@ -120,13 +120,28 @@ public class DependencySyncIntegrationTests
         try
         {
             var project = ConanProject.Find(app)!;
-            var result = await new DependencySync(new ConanCli("conan", app)).RunAsync(
-                project, new VsConanSettings { HostProfiles = { "default" } }, force: false, _ => { }, CancellationToken.None);
+            var settings = new VsConanSettings { HostProfiles = { "default" } };
+            settings.Save(app);
+            var cli = new ConanCli("conan", app);
+            var sync = new DependencySync(cli);
+            var result = await sync.RunAsync(project, settings, force: false, _ => { }, CancellationToken.None);
 
             Assert.Equal(SyncOutcome.Installed, result.Outcome);
-            var usage = Assert.Single(InstallReport.Create(project, result).Profiles).CMakeUsage;
-            Assert.Equal(new[] { "VsConanTestDep" }, usage!.FindPackages);
-            Assert.Equal(new[] { "VsConanTestDep::headers" }, usage.Targets);
+            AssertUsage(InstallReport.Create(project, result).CMakeUsage);
+
+            // Remembered: an up-to-date install, and the status, still report the names.
+            var again = await sync.RunAsync(project, settings, force: false, _ => { }, CancellationToken.None);
+            Assert.Equal(SyncOutcome.UpToDate, again.Outcome);
+            AssertUsage(InstallReport.Create(project, again).CMakeUsage);
+            AssertUsage((await ProjectStatus.CreateAsync(project, cli, null, CancellationToken.None)).CMakeUsage);
+
+            static void AssertUsage(Dictionary<string, CMakeUsage>? byProfile)
+            {
+                var usage = Assert.Single(byProfile!);
+                Assert.Equal("default", usage.Key);
+                Assert.Equal(new[] { "VsConanTestDep" }, usage.Value.FindPackages);
+                Assert.Equal(new[] { "VsConanTestDep::headers" }, usage.Value.Targets);
+            }
         }
         finally
         {

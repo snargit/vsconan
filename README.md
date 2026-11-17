@@ -165,11 +165,11 @@ starts, and again when it finishes:
   "completedAt": "2026-10-14T16:20:31.456+01:00",
   "result": {
     "outcome": "installed",
-    "profiles": [ {
-      "profile": "default", "succeeded": true, "exitCode": 0,
-      "cmakeUsage": { "findPackages": [ "fmt" ], "targets": [ "fmt::fmt" ] }
-    } ],
-    "configurePresets": [ "conan-default-release" ]
+    "profiles": [ { "profile": "default", "succeeded": true, "exitCode": 0 } ],
+    "configurePresets": [ "conan-default-release" ],
+    "cmakeUsage": {
+      "default": { "findPackages": [ "fmt" ], "targets": [ "fmt::fmt" ] }
+    }
   }
 }
 ```
@@ -185,16 +185,22 @@ starts, and again when it finishes:
 - `result` depends on the command:
   - `Conan.ShowStatus` and `Conan.SelectProfiles` give a **status**: `folder`, `conanfile`,
     `usesCmakeLayout`, `hostProfiles`, `buildProfile`, `upToDate`, `installing` (an install is
-    running, so CMake is paused until it finishes), `cmakePaused`, `configurePresets` and
-    `availableProfiles`.
+    running, so CMake is paused until it finishes), `cmakePaused`, `configurePresets`,
+    `availableProfiles` and `cmakeUsage`.
   - `Conan.InstallDependencies` gives an **install report**: `outcome` (`installed`, `upToDate`,
-    `partiallyFailed` or `userPresetsNotOwned`), `profiles` and `configurePresets`. A failed
-    profile also has `errorOutput`: the last lines of Conan's output, which is where Conan
-    reports the error. The full log is in the **Conan** output pane. A profile that installed
-    has `cmakeUsage`: the `findPackages` names and link `targets` of its direct dependencies,
-    as CMakeDeps lists them. These are the names the recipes define, which often differ from
-    the package names. They can differ between profiles when the conanfile's requirements
-    depend on settings. They're only there when Conan ran, so an `upToDate` install has none.
+    `partiallyFailed` or `userPresetsNotOwned`), `profiles` (the ones Conan ran for),
+    `configurePresets` and `cmakeUsage`. A failed profile also has `errorOutput`: the last
+    lines of Conan's output, which is where Conan reports the error. The full log is in the
+    **Conan** output pane.
+- `cmakeUsage`, in both kinds of result, gives the `findPackages` names and link `targets` of
+  each selected host profile's direct dependencies, as CMakeDeps lists them:
+  - These are the names the recipes define, which often differ from the package names.
+  - They come from each profile's last successful install and are kept in
+    `.vs/VsConan/state.json`, so an `upToDate` install and the status report them too.
+  - A profile whose install failed keeps the names from its last good install, just as it keeps
+    that install's presets.
+  - The names can differ between profiles when the conanfile's requirements depend on settings.
+  - If `upToDate` is false, the names may not match the conanfile yet.
 - Both kinds of result can have `hints`: a list of next steps, written for the caller and naming
   VsConan's commands. For example, a hint might say to run `Conan.SelectProfiles` because none
   are selected, or that the conanfile needs `cmake_layout`. Some say to ask the user first, for
