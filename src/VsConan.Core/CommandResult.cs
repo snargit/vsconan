@@ -142,6 +142,10 @@ public sealed class ProjectStatus
     [JsonProperty("availableProfiles", NullValueHandling = NullValueHandling.Ignore)]
     public List<string>? AvailableProfiles { get; set; }
 
+    /// <summary>What the caller should do next, in words meant for it; omitted when there's nothing to do.</summary>
+    [JsonProperty("hints", NullValueHandling = NullValueHandling.Ignore)]
+    public List<string>? Hints { get; set; }
+
     /// <param name="cli">Conan, run in the project folder; used to check whether the install is up to date.</param>
     public static async Task<ProjectStatus> CreateAsync(
         ConanProject project, ConanCli cli, IReadOnlyList<string>? availableProfiles, CancellationToken cancellationToken,
@@ -151,7 +155,7 @@ public sealed class ProjectStatus
         var settings = VsConanSettings.Load(directory);
         var upToDate = settings.HostProfiles.Count > 0
             && await DependencySync.IsUpToDateAsync(project, settings, cli, cancellationToken).ConfigureAwait(false);
-        return new ProjectStatus
+        var status = new ProjectStatus
         {
             Folder = directory,
             Conanfile = Path.GetFileName(project.ConanfilePath),
@@ -164,6 +168,37 @@ public sealed class ProjectStatus
             ConfigurePresets = UserPresetsFile.CurrentConfigurePresetNames(directory).ToList(),
             AvailableProfiles = availableProfiles?.ToList(),
         };
+        status.Hints = status.CreateHints(pausedByVsConan: VsConanState.Load(directory).CMakeGateClosed);
+        return status;
+    }
+
+    private List<string>? CreateHints(bool pausedByVsConan)
+    {
+        var hints = new List<string>();
+        if (HostProfiles.Count == 0)
+        {
+            hints.Add(CallerHints.NoProfiles(CMakePaused));
+        }
+        else if (Installing)
+        {
+            hints.Add(CallerHints.Installing);
+        }
+        else if (!UpToDate)
+        {
+            hints.Add(CallerHints.OutOfDate);
+        }
+
+        if (!UsesCmakeLayout)
+        {
+            hints.Add(CallerHints.NoCmakeLayout);
+        }
+
+        if (CMakePaused && !pausedByVsConan)
+        {
+            hints.Add(CallerHints.CMakeTurnedOffByUser);
+        }
+
+        return hints.Count > 0 ? hints : null;
     }
 }
 
@@ -181,6 +216,10 @@ public sealed class InstallReport
     [JsonProperty("configurePresets")]
     public List<string> ConfigurePresets { get; set; } = new();
 
+    /// <summary>What the caller should do next, in words meant for it; omitted when there's nothing to do.</summary>
+    [JsonProperty("hints", NullValueHandling = NullValueHandling.Ignore)]
+    public List<string>? Hints { get; set; }
+
     public static InstallReport Create(ConanProject project, SyncResult result) => new()
     {
         Outcome = result.Outcome switch
@@ -191,10 +230,49 @@ public sealed class InstallReport
             _ => "userPresetsNotOwned",
         },
         Profiles = result.Profiles
-            .Select(p => new ProfileOutcome { Profile = p.Profile, Succeeded = p.Succeeded, ExitCode = p.ExitCode })
+            .Select(p => new ProfileOutcome
+            {
+                Profile = p.Profile,
+                Succeeded = p.Succeeded,
+                ExitCode = p.ExitCode,
+                ErrorOutput = p.Succeeded ? null : p.ErrorOutput,
+            })
             .ToList(),
         ConfigurePresets = UserPresetsFile.CurrentConfigurePresetNames(project.RootDirectory).ToList(),
+        Hints = CreateHints(project, result),
     };
+
+    private static List<string>? CreateHints(ConanProject project, SyncResult result)
+    {
+        var hints = new List<string>();
+        if (result.Outcome == SyncOutcome.UserPresetsNotOwned)
+        {
+            hints.Add(CallerHints.UserPresetsNotOwned);
+        }
+
+        var failed = result.Profiles.Where(p => !p.Succeeded).Select(p => p.Profile).ToList();
+        if (failed.Count > 0)
+        {
+            hints.Add(CallerHints.ProfilesFailed(failed));
+        }
+
+        var withoutPresets = result.Profiles
+            .Where(p => p.Succeeded && (p.PresetsFile is null || !File.Exists(p.PresetsFile)))
+            .Select(p => p.Profile)
+            .ToList();
+        if (withoutPresets.Count > 0)
+        {
+            hints.Add(CallerHints.NoPresets(withoutPresets));
+        }
+
+        // Only worth saying when Conan ran: an up-to-date install got its presets some other way.
+        if (result.Profiles.Count > 0 && !project.UsesCmakeLayout)
+        {
+            hints.Add(CallerHints.NoCmakeLayout);
+        }
+
+        return hints.Count > 0 ? hints : null;
+    }
 
     public sealed class ProfileOutcome
     {
@@ -206,5 +284,56 @@ public sealed class InstallReport
 
         [JsonProperty("exitCode")]
         public int ExitCode { get; set; }
+
+        /// <summary>For a failed profile, the end of Conan's output, where it reports the error.</summary>
+        [JsonProperty("errorOutput", NullValueHandling = NullValueHandling.Ignore)]
+        public string? ErrorOutput { get; set; }
     }
+}
+
+/// <summary>
+/// The hints in automation results: what to do next, worded for whoever made the call (often an
+/// agent), and naming VsConan's own commands, which hold whatever drives them.
+/// </summary>
+internal static class CallerHints
+{
+    public static string NoProfiles(bool cmakePaused) =>
+        "No host profiles are selected, so no dependencies are installed"
+        + (cmakePaused ? " and Visual Studio's CMake stays paused" : string.Empty)
+        + ". Choose from availableProfiles, run Conan.SelectProfiles <host profiles> [/build:<profile>], then Conan.InstallDependencies.";
+
+    public const string Installing =
+        "An install is running, and Visual Studio's CMake is paused until it finishes. Conan.InstallDependencies waits for it.";
+
+    public const string OutOfDate =
+        "The installed dependencies don't match the conanfile, conan.lock, conandata.yml or the selected profiles, "
+        + "or haven't been installed yet. Run Conan.InstallDependencies.";
+
+    public const string NoCmakeLayout =
+        "The conanfile doesn't appear to use cmake_layout. Add it (cmake_layout(self) in layout() of a conanfile.py, "
+        + "or cmake_layout under [layout] in a conanfile.txt): VsConan names each profile's build folder and presets "
+        + "through it, and without it the presets of different profiles have the same names.";
+
+    public const string CMakeTurnedOffByUser =
+        "Visual Studio's CMake is turned off for this folder (\"enableCMake\": false in .vs/CMakeWorkspaceSettings.json), "
+        + "and not by VsConan, so VsConan leaves it off and Visual Studio won't configure from the presets. "
+        + "It may have been turned off on purpose: ask the user before turning it back on.";
+
+    public const string UserPresetsNotOwned =
+        "Nothing was installed: the folder's CMakeUserPresets.json wasn't written by Conan or VsConan, so VsConan won't overwrite it. "
+        + "It may be someone's own file: ask the user before deleting or renaming it. "
+        + "After that, Conan.InstallDependencies installs and VsConan writes its own.";
+
+    public static string ProfilesFailed(IReadOnlyList<string> profiles) =>
+        $"Conan failed for {Name(profiles)}: errorOutput has the end of its output, and the Conan pane of the Output window has the full log. "
+        + "Profiles that succeeded have current presets, and a failed one keeps those of its last successful install. "
+        + "Fix the cause, then run Conan.InstallDependencies again.";
+
+    public static string NoPresets(IReadOnlyList<string> profiles) =>
+        $"Conan wrote no CMakePresets.json for {Name(profiles)}, so Visual Studio has no configuration for it. "
+        + "The conanfile needs the CMakeToolchain generator, and CMakeDeps for find_package: "
+        + "under [generators] in a conanfile.txt, or in generators of a conanfile.py.";
+
+    private static string Name(IReadOnlyList<string> profiles) =>
+        (profiles.Count == 1 ? "profile " : "profiles ") + string.Join(", ", profiles.Select(p => $"'{p}'"));
 }

@@ -74,6 +74,23 @@ public class DependencySyncIntegrationTests
     }
 
     [Fact]
+    public async Task RunAsync_ReportsConansErrorForAFailedProfile()
+    {
+        using var dir = new TempDirectory();
+        File.WriteAllText(Path.Combine(dir.Path, "conanfile.txt"), "[layout]\ncmake_layout\n[nosuchsection]\n");
+        File.WriteAllText(Path.Combine(dir.Path, "CMakeLists.txt"), "cmake_minimum_required(VERSION 3.23)\nproject(app CXX)\n");
+        var project = ConanProject.Find(dir.Path)!;
+
+        var result = await new DependencySync(new ConanCli("conan", dir.Path)).RunAsync(
+            project, new VsConanSettings { HostProfiles = { "default" } }, force: false, _ => { }, CancellationToken.None);
+
+        Assert.Equal(SyncOutcome.PartiallyFailed, result.Outcome);
+        var profile = Assert.Single(result.Profiles);
+        Assert.Contains("ERROR", profile.ErrorOutput);
+        Assert.Contains("nosuchsection", profile.ErrorOutput);
+    }
+
+    [Fact]
     public async Task RunAsync_RefusesToOverwriteHandWrittenUserPresets()
     {
         using var dir = new TempDirectory();

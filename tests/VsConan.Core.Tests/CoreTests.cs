@@ -511,3 +511,129 @@ public class StatusAndResultTests
         Assert.Equal(expected, Unattended.IsSet(name => name == Unattended.VariableName ? value : null));
     }
 }
+
+public class OutputTailTests
+{
+    [Fact]
+    public void KeepsTheLastLinesAndSkipsBlankOnes()
+    {
+        var tail = new OutputTail(maxLines: 2);
+        foreach (var line in new[] { "one", "", "two  ", "   ", "three" })
+        {
+            tail.Add(line);
+        }
+
+        Assert.Equal("two\nthree", tail.ToString());
+        Assert.Null(new OutputTail().ToString());
+    }
+
+    [Fact]
+    public void CutsFromTheStartAtALineBoundary()
+    {
+        var tail = new OutputTail(maxLines: 10, maxCharacters: 12);
+        tail.Add("first line");
+        tail.Add("ERROR: boom");
+
+        Assert.Equal("ERROR: boom", tail.ToString());
+    }
+}
+
+public class HintTests
+{
+    private const string Layout = "[layout]\ncmake_layout\n";
+
+    private static ConanProject Project(TempDirectory dir, string conanfile = Layout)
+    {
+        dir.Write("CMakeLists.txt");
+        dir.Write("conanfile.txt", conanfile);
+        return ConanProject.Find(dir.Path)!;
+    }
+
+    private static System.Threading.Tasks.Task<ProjectStatus> StatusAsync(ConanProject project, bool installing = false) =>
+        ProjectStatus.CreateAsync(project, new ConanCli("conan", project.RootDirectory), null, System.Threading.CancellationToken.None, installing);
+
+    [Fact]
+    public async System.Threading.Tasks.Task Status_WithoutProfiles_SaysHowToChooseThem()
+    {
+        using var dir = new TempDirectory();
+        var project = Project(dir);
+        new CMakeGate(dir.Path).Close();
+
+        var hint = Assert.Single((await StatusAsync(project)).Hints!);
+
+        Assert.Contains("No host profiles are selected", hint);
+        Assert.Contains("CMake stays paused", hint);
+        Assert.Contains("Conan.SelectProfiles", hint);
+    }
+
+    [Fact]
+    public async System.Threading.Tasks.Task Status_OutOfDateOrInstalling_SaysSo()
+    {
+        using var dir = new TempDirectory();
+        var project = Project(dir);
+        new VsConanSettings { HostProfiles = { "default" } }.Save(dir.Path);
+
+        Assert.Equal(new[] { CallerHints.OutOfDate }, (await StatusAsync(project)).Hints);
+        Assert.Equal(new[] { CallerHints.Installing }, (await StatusAsync(project, installing: true)).Hints);
+    }
+
+    [Fact]
+    public async System.Threading.Tasks.Task Status_ExplainsAMissingCmakeLayoutAndCMakeTurnedOffByTheUser()
+    {
+        using var dir = new TempDirectory();
+        var project = Project(dir, "[generators]\nCMakeToolchain\n");
+        new VsConanSettings { HostProfiles = { "default" } }.Save(dir.Path);
+        dir.Write(Path.Combine(".vs", "CMakeWorkspaceSettings.json"), "{ \"enableCMake\": false }");
+
+        var hints = (await StatusAsync(project)).Hints!;
+
+        Assert.Contains(CallerHints.NoCmakeLayout, hints);
+        Assert.Contains(CallerHints.CMakeTurnedOffByUser, hints);
+    }
+
+    [Fact]
+    public void InstallReport_UpToDate_HasNoHints()
+    {
+        using var dir = new TempDirectory();
+        var report = InstallReport.Create(Project(dir), new SyncResult(SyncOutcome.UpToDate, Array.Empty<ProfileInstallResult>()));
+
+        Assert.Null(report.Hints);
+        Assert.Null(Newtonsoft.Json.Linq.JObject.FromObject(report)["hints"]);
+    }
+
+    [Fact]
+    public void InstallReport_FailedProfile_CarriesConansErrorAndAHint()
+    {
+        using var dir = new TempDirectory();
+        var presets = dir.Write(Path.Combine("build", "default", "CMakePresets.json"), "{}");
+        var result = new SyncResult(SyncOutcome.PartiallyFailed, new[]
+        {
+            new ProfileInstallResult("default", 0, presets),
+            new ProfileInstallResult("clang", 1, null, "ERROR: Invalid setting"),
+        });
+
+        var report = InstallReport.Create(Project(dir), result);
+        var json = Newtonsoft.Json.Linq.JObject.FromObject(report);
+
+        Assert.Null(json["profiles"]![0]!["errorOutput"]);
+        Assert.Equal("ERROR: Invalid setting", (string?)json["profiles"]![1]!["errorOutput"]);
+        var hint = Assert.Single(report.Hints!);
+        Assert.Contains("Conan failed for profile 'clang'", hint);
+    }
+
+    [Fact]
+    public void InstallReport_ExplainsMissingPresetsAndHandWrittenUserPresets()
+    {
+        using var dir = new TempDirectory();
+        var project = Project(dir);
+
+        var noPresets = InstallReport.Create(project, new SyncResult(SyncOutcome.Installed, new[]
+        {
+            new ProfileInstallResult("default", 0, null),
+        }));
+        var notOwned = InstallReport.Create(project, new SyncResult(SyncOutcome.UserPresetsNotOwned, Array.Empty<ProfileInstallResult>()));
+
+        Assert.Contains("CMakeToolchain", Assert.Single(noPresets.Hints!));
+        Assert.Equal(new[] { CallerHints.UserPresetsNotOwned }, notOwned.Hints);
+    }
+}

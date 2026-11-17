@@ -185,7 +185,15 @@ starts, and again when it finishes:
     running, so CMake is paused until it finishes), `cmakePaused`, `configurePresets` and
     `availableProfiles`.
   - `Conan.InstallDependencies` gives an **install report**: `outcome` (`installed`, `upToDate`,
-    `partiallyFailed` or `userPresetsNotOwned`), `profiles` and `configurePresets`.
+    `partiallyFailed` or `userPresetsNotOwned`), `profiles` and `configurePresets`. A failed
+    profile also has `errorOutput`: the last lines of Conan's output, which is where Conan
+    reports the error. The full log is in the **Conan** output pane.
+- Both kinds of result can have `hints`: a list of next steps, written for the caller and naming
+  VsConan's commands. For example, a hint might say to run `Conan.SelectProfiles` because none
+  are selected, or that the conanfile needs `cmake_layout`. Some say to ask the user first, for
+  example before deleting a hand-written `CMakeUserPresets.json`. `hints` is left out when there's
+  nothing to do. An agent can pass the hints on, or act on them, without knowing VsConan's rules
+  itself.
 
 Each command also writes a one-line summary to the **Conan** output pane. Automated commands
 don't bring the pane forward. `Conan.InstallDependencies` waits for an install that's already

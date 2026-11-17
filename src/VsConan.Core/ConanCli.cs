@@ -68,23 +68,35 @@ public sealed class ConanCli
     private Task<ProcessResult> RunAsync(IEnumerable<string> arguments, CancellationToken cancellationToken) =>
         ProcessRunner.RunAsync(Executable, arguments, WorkingDirectory, null, cancellationToken);
 
-    /// <summary>Runs the install. Conan's log goes to <paramref name="onOutput"/>; the JSON graph is parsed.</summary>
+    /// <summary>
+    /// Runs the install. Conan's log goes to <paramref name="onOutput"/>; the JSON graph is parsed.
+    /// A failed install's result carries the end of the log, where Conan reports the error.
+    /// </summary>
     public async Task<ProfileInstallResult> InstallAsync(
         ConanInstallRequest request, Action<string> onOutput, CancellationToken cancellationToken)
     {
+        var tail = new OutputTail();
         var result = await ProcessRunner.RunAsync(
-            Executable, request.BuildArguments(), request.ProjectDirectory, onOutput, cancellationToken,
+            Executable, request.BuildArguments(), request.ProjectDirectory,
+            line =>
+            {
+                tail.Add(line);
+                onOutput(line);
+            },
+            cancellationToken,
             streamStandardOutput: false)
             .ConfigureAwait(false);
 
-        string? presetsFile = null;
-        if (result.ExitCode == 0)
+        if (result.ExitCode != 0)
         {
-            var generatorsFolder = ParseGeneratorsFolder(result.StandardOutput);
-            if (generatorsFolder is not null)
-            {
-                presetsFile = Path.Combine(generatorsFolder, "CMakePresets.json");
-            }
+            return new ProfileInstallResult(request.HostProfile, result.ExitCode, null, tail.ToString());
+        }
+
+        string? presetsFile = null;
+        var generatorsFolder = ParseGeneratorsFolder(result.StandardOutput);
+        if (generatorsFolder is not null)
+        {
+            presetsFile = Path.Combine(generatorsFolder, "CMakePresets.json");
         }
 
         return new ProfileInstallResult(request.HostProfile, result.ExitCode, presetsFile);

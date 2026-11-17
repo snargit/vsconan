@@ -7,11 +7,12 @@ namespace VsConan.Core;
 
 public sealed class ProfileInstallResult
 {
-    public ProfileInstallResult(string profile, int exitCode, string? presetsFile)
+    public ProfileInstallResult(string profile, int exitCode, string? presetsFile, string? errorOutput = null)
     {
         Profile = profile;
         ExitCode = exitCode;
         PresetsFile = presetsFile;
+        ErrorOutput = errorOutput;
     }
 
     public string Profile { get; }
@@ -20,6 +21,9 @@ public sealed class ProfileInstallResult
 
     /// <summary>The CMakePresets.json Conan generated for this profile, if the install succeeded.</summary>
     public string? PresetsFile { get; }
+
+    /// <summary>The end of Conan's output, where it reports the error, if the install failed.</summary>
+    public string? ErrorOutput { get; }
 
     public bool Succeeded => ExitCode == 0;
 }
