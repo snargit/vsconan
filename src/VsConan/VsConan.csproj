@@ -11,6 +11,12 @@
     <!-- Lets Microsoft.VSSDK.BuildTools wire up VSIX packaging for an SDK-style project. -->
     <VSSDKBuildToolsAutoSetup>true</VSSDKBuildToolsAutoSetup>
     <GeneratePkgDefFile>true</GeneratePkgDefFile>
+    <!--
+      Register the package with "CodeBase"="$PackageFolder$\VsConan.dll", so Visual Studio loads it from
+      the extension's folder. The 18.x tools default to this but the 17.x tools don't, and a package
+      registered by assembly name alone fails to load ("Could not load file or assembly 'VsConan'").
+    -->
+    <UseCodebase>true</UseCodebase>
     <IncludeAssemblyInVSIXContainer>true</IncludeAssemblyInVSIXContainer>
     <IncludeDebugSymbolsInVSIXContainer>true</IncludeDebugSymbolsInVSIXContainer>
     <IncludeDebugSymbolsInLocalVSIXDeployment>true</IncludeDebugSymbolsInLocalVSIXDeployment>
